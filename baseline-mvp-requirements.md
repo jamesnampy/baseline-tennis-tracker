@@ -1,7 +1,7 @@
 # Baseline Tennis Tracker — MVP Requirements
 
 **Status:** Finalized for MVP build  
-**Requirements version:** 1.0  
+**Requirements version:** 1.1
 **Experience reference:** `baseline-clickthrough.html` (MVP Experience v1.0)  
 **Product type:** Mobile-first installable web application (PWA)
 
@@ -21,6 +21,7 @@ The interface must prioritize accurate score capture. Optional details must neve
 - Operate offline during match tracking.
 - Provide an on-demand LLM strategy review using the cumulative dataset for both players.
 - Export lossless, vendor-neutral data.
+- Preserve an API-ready, versioned dataset that can later be downloaded or explicitly shared with Codex, Claude, or another analysis tool.
 
 ## 3. Platform and technical direction
 
@@ -177,6 +178,17 @@ Row 2:
 - Unforced Error
 
 Selecting an outcome opens the optional details tray beneath **Skip details**.
+
+### Outcome eligibility and validation
+
+Return outcomes must agree with the server, receiver, and recorded point winner:
+
+- **Return Winner** is available only when the receiver won the point after a serve was put in. If the server won the point, Return Winner is unavailable.
+- **Return Error** is available only when the server won the point because the receiver made the point-ending return error. If the server lost the point, Return Error is unavailable.
+- An ace is recorded automatically as an Ace and cannot also receive a return outcome.
+- A double fault is recorded automatically as a Double Fault and cannot also receive a return outcome.
+- The point-entry interface hides or disables outcomes that contradict the saved serve and point-winner context.
+- Domain validation applies the same rules to tracked, corrected, imported, and re-imported data. Contradictory events are rejected or explicitly flagged for correction; they are never silently included in statistics.
 
 ### Outcome attribution
 
@@ -352,6 +364,22 @@ Live statistics compare both players and update after every event.
 - Shot-type and advanced shot-type outcomes
 - Points won by rally-length range
 
+### Pressure situations and points won
+
+Pressure context is derived from the score snapshot immediately before each point and the active match-format rules. The app reports, separately for both players:
+
+- Pressure points played, won, and win percentage
+- Pressure points won while serving and while returning
+- Points won at 30–30 or later in a standard game
+- Deuce and advantage points won
+- No-ad deciding points won
+- Break points created, converted, faced, and saved
+- Game points, set points, and match points won and lost
+- Tiebreak points won, including points at 5–5 or later in a 7-point tiebreak and 8–8 or later in a 10-point match tiebreak
+- Points won by first serve, second serve, return, rally-length range, and active mental-state observation
+
+A point can belong to more than one named pressure category, such as both a break point and a set point. The overall pressure-points total counts each point only once. Every rate displays its numerator, denominator, sample size, and tracking coverage; the interface does not use unsupported labels such as “clutch.” Points added only through score synchronization are excluded when their point-level score context is unknown.
+
 ### Data quality
 
 - Estimated total points
@@ -478,7 +506,7 @@ The point-completion event contains a score snapshot before and after the point 
 - The UI clearly shows local-save and analysis-connectivity state.
 - Background synchronization cannot change the local event order.
 
-## 17. Data portability
+## 17. Data portability and analysis API
 
 The MVP exports one match or all matches as a portable bundle containing:
 
@@ -490,6 +518,7 @@ The MVP exports one match or all matches as a portable bundle containing:
 - `score_syncs.csv`
 - `events.json`
 - `schema.json`
+- `manifest.json`
 
 Requirements:
 
@@ -499,6 +528,23 @@ Requirements:
 - Re-import support
 - Optional anonymization of player and opponent names
 - No vendor lock-in
+- A one-tap analysis-bundle download suitable for upload to Codex, Claude, or another analysis system
+
+### API-ready access
+
+The authoritative event model must also support a documented, versioned, read-only API contract for future direct analysis access. The contract includes:
+
+- List matches available to the authenticated user
+- Retrieve match metadata, players, tournament grouping, score projections, and calculated statistics
+- Retrieve the ordered, lossless event log for a match
+- Retrieve point, serve, shot, mental-state, score-correction, and strategy-review records
+- Download one match, one tournament, or all authorized data in JSON or CSV bundle form
+- Filter or paginate by match, tournament, event sequence, and update timestamp
+- Return schema version, dataset version, generation timestamp, coverage, and anonymization status with every export
+
+Device-local records are not exposed to a hosted API unless the user explicitly enables an upload or cloud-sync capability. Hosted API access is disabled by default, authenticated, read-only, user-scoped, and revocable. A Codex, Claude, or other third-party analysis session receives data only through an explicit user download or an explicitly granted API credential. The API representation must match the downloadable event schema so analyses remain reproducible and vendor-neutral.
+
+The local-only MVP must deliver the complete analysis bundle and preserve this API contract. Activating remote API access depends on the future encrypted cloud-backup and cross-device synchronization capability.
 
 ## 18. Privacy
 
@@ -528,6 +574,9 @@ The MVP is complete when:
 14. JSON and CSV exports reproduce the complete event history.
 15. An on-demand strategy request uses both players' data and records its model, prompt, cutoff, evidence, and coverage.
 16. Primary courtside controls meet a minimum 44 × 44 CSS-pixel touch target.
+17. Return Winner and Return Error choices are limited by server, receiver, serve result, and point winner, and contradictory events fail validation.
+18. Pressure analytics show points won, points played, percentage, sample size, and coverage for both players using score-before-point context.
+19. A user can download a complete, versioned analysis bundle, and the documented future API contract preserves the same authoritative dataset for explicit Codex or Claude access.
 
 ## 20. Future enhancements
 
