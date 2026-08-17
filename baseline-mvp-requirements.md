@@ -1,7 +1,7 @@
 # Baseline Tennis Tracker — MVP Requirements
 
 **Status:** Finalized for MVP build  
-**Requirements version:** 1.1
+**Requirements version:** 1.2
 **Experience reference:** `baseline-clickthrough.html` (MVP Experience v1.0)  
 **Product type:** Mobile-first installable web application (PWA)
 
@@ -22,6 +22,8 @@ The interface must prioritize accurate score capture. Optional details must neve
 - Provide an on-demand LLM strategy review using the cumulative dataset for both players.
 - Export lossless, vendor-neutral data.
 - Preserve an API-ready, versioned dataset that can later be downloaded or explicitly shared with Codex, Claude, or another analysis tool.
+- Correlate results and trends across matches through stable player profiles.
+- Generate a privacy-controlled match report that can be shared with a coach.
 
 ## 3. Platform and technical direction
 
@@ -37,8 +39,8 @@ The interface must prioritize accurate score capture. Optional details must neve
 
 Required setup fields:
 
-- My player name
-- Opponent name
+- My player profile
+- Opponent profile, new opponent, or guest opponent name
 - Match format
 - First server
 - Ad scoring switch
@@ -52,6 +54,20 @@ Optional setup fields:
 - Opponent Starting State
 
 The tournament URL is stored with the match. Matches sharing a normalized tournament identifier or URL can be grouped for tournament analysis. Automated USTA-page import is not part of the MVP.
+
+### Player profiles and match identity
+
+The app maintains stable player profiles so results can be correlated across matches even if a display name changes.
+
+- At least one persistent **My Player** profile is supported for the tracked child/player.
+- Match setup selects the My Player profile rather than creating a new free-text identity for every match.
+- An opponent can be selected from an existing profile, created as a new profile, or entered as a temporary guest and linked to a profile later.
+- Every profile has a stable player ID, display name, role, created and updated timestamps, and optional aliases, handedness, USTA player identifier or profile URL, and notes.
+- Each match stores stable profile IDs plus a snapshot of the display names used on match day, preserving historical reports when a profile is renamed.
+- Profile merge and guest-link operations preserve original match and event IDs and create an auditable identity-mapping record.
+- A match cannot reference the same profile as both players.
+
+Profile views aggregate authorized matches by player, opponent, tournament, date range, match format, serve and return performance, shot outcomes, pressure situations, mental-state observations, and win/loss result. Every aggregate discloses match count, tracked-point count, and data coverage. Profiles and longitudinal comparisons remain private by default.
 
 ### Mental-state choices
 
@@ -498,6 +514,8 @@ Every event contains:
 
 The point-completion event contains a score snapshot before and after the point plus all observed point details. Derived projections can always be rebuilt from the event log.
 
+Match records reference stable player-profile IDs while retaining match-day display-name snapshots. Profile merges change identity projections, not the immutable historical point events.
+
 ## 16. Offline persistence and recovery
 
 - Every action is saved immediately to IndexedDB.
@@ -511,6 +529,7 @@ The point-completion event contains a score snapshot before and after the point 
 The MVP exports one match or all matches as a portable bundle containing:
 
 - `matches.csv`
+- `players.csv`
 - `points.csv`
 - `serves.csv`
 - `shots.csv`
@@ -519,6 +538,7 @@ The MVP exports one match or all matches as a portable bundle containing:
 - `events.json`
 - `schema.json`
 - `manifest.json`
+- `match-report.html` when a coach report is included
 
 Requirements:
 
@@ -546,15 +566,38 @@ Device-local records are not exposed to a hosted API unless the user explicitly 
 
 The local-only MVP must deliver the complete analysis bundle and preserve this API contract. Activating remote API access depends on the future encrypted cloud-backup and cross-device synchronization capability.
 
-## 18. Privacy
+## 18. Shareable coach match report
+
+After a match, the user can create a read-only match-result report designed for review with a coach. The report is available as a mobile-friendly web page and a self-contained HTML download that can be printed or saved as PDF.
+
+The report includes:
+
+- Player names, tournament context, date, match format, winner, and complete final score
+- Two-player service, return, point, pressure, and shot statistics with numerator, denominator, sample size, and tracking coverage
+- Evidence-based match analysis derived from the displayed statistics, clearly separating observations from recommendations
+- Set-by-set and point-by-point match timeline, including score progression, breaks, holds, tiebreaks, corrections, and important momentum changes
+- Mental-state progression for the tracked player, and for the opponent when observed, aligned to points, games, and sets
+- Data-quality disclosures for missed points, score synchronizations, incomplete shot details, and subjective mental-state observations
+- Generation timestamp, dataset version, match event cutoff, and report version
+
+Before generating or sharing, the user can include or exclude opponent identity, tournament link, detailed point timeline, mental-state graph, mental-state notes, and coaching recommendations. The default coach report excludes free-form private notes.
+
+The self-contained HTML report can be created from device-local data without uploading the full match. Creating a hosted share link requires connectivity and an explicit user action. Hosted reports are private by default, use an unguessable read-only link or named-recipient access, are excluded from search indexing, and can be revoked. Optional link expiration is supported. Sharing one report never grants access to other matches, player profiles, raw API endpoints, or future profile data.
+
+A shared report is an immutable snapshot of the selected dataset and privacy choices. Regenerating analysis or correcting the match creates a new report version and marks older versions as out of date; it does not silently change what a coach previously reviewed.
+
+## 19. Privacy
 
 - Match and mental-state data remain on the device by default.
 - External analysis is always user initiated.
 - Exports can be anonymized.
 - Observed mental states are labeled as subjective observations.
 - The product does not make psychological, medical, or diagnostic claims.
+- Player profiles and cross-match history are private by default.
+- Mental-state details are excluded from coach reports unless the user explicitly includes them.
+- Share links are user initiated, read-only, scoped to one report, and revocable.
 
-## 19. MVP acceptance criteria
+## 20. MVP acceptance criteria
 
 The MVP is complete when:
 
@@ -577,12 +620,15 @@ The MVP is complete when:
 17. Return Winner and Return Error choices are limited by server, receiver, serve result, and point winner, and contradictory events fail validation.
 18. Pressure analytics show points won, points played, percentage, sample size, and coverage for both players using score-before-point context.
 19. A user can download a complete, versioned analysis bundle, and the documented future API contract preserves the same authoritative dataset for explicit Codex or Claude access.
+20. Stable player profiles associate the same player with multiple matches and support opponent reuse or later guest linking without rewriting historical events.
+21. Profile analytics aggregate only authorized matches and disclose match count, tracked-point count, and coverage.
+22. A user can generate a mobile-friendly, self-contained coach report containing the selected result, statistics, evidence-based analysis, timeline, and mental-state progression.
+23. A hosted coach-report link requires explicit sharing, exposes only the selected report, and can be revoked without affecting the underlying match.
 
-## 20. Future enhancements
+## 21. Future enhancements
 
-- Persistent player profiles, with at least one dedicated profile for my player/son
-- Saved opponent profiles and opponent history
 - Encrypted cloud backup and cross-device synchronization
+- Advanced profile merge suggestions and duplicate-player detection
 - Automated USTA tournament metadata import when permitted
 - Tournament, season, and opponent trend analysis
 - Apple Watch input
@@ -591,7 +637,7 @@ The MVP is complete when:
 - Video synchronization and court-placement diagrams
 - Advanced coaching and practice-plan generation
 
-## 21. Experience reference
+## 22. Experience reference
 
 `baseline-clickthrough.html` is the canonical MVP experience reference for layout, terminology, control grouping, point-entry order, mobile touch sizing, live-stat presentation, timeline presentation, and on-demand strategy review.
 
