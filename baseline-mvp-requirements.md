@@ -1,0 +1,549 @@
+# Baseline Tennis Tracker — MVP Requirements
+
+**Status:** Finalized for MVP build  
+**Requirements version:** 1.0  
+**Experience reference:** `baseline-clickthrough.html` (MVP Experience v1.0)  
+**Product type:** Mobile-first installable web application (PWA)
+
+## 1. Product purpose
+
+Baseline helps a parent track a junior tennis match from courtside with extremely fast, one-handed input. It records both players symmetrically, works without reliable cellular service, shows useful live statistics, preserves a complete point-by-point record, and makes the dataset portable for future analysis by Codex, Claude, or other tools.
+
+The interface must prioritize accurate score capture. Optional details must never block entry of the next point.
+
+## 2. MVP goals
+
+- Record a match accurately with minimal taps.
+- Track both players' serves, returns, point outcomes, final-shot details, rally ranges, and observable mental states.
+- Recover cleanly when the parent misses one or more points.
+- Show the complete match score and useful two-player live statistics.
+- Preserve an append-only event history for undo, corrections, timelines, exports, and analysis.
+- Operate offline during match tracking.
+- Provide an on-demand LLM strategy review using the cumulative dataset for both players.
+- Export lossless, vendor-neutral data.
+
+## 3. Platform and technical direction
+
+- React and TypeScript mobile-first PWA.
+- IndexedDB for device-local match storage and offline recovery.
+- Service worker and installable web-app manifest.
+- Event-sourced match model: saved events are authoritative; scores and statistics are projections.
+- Cloudflare-based hosting for the web application.
+- Vendor-neutral analysis interface so an approved LLM provider can be changed later.
+- Automated scoring-engine tests covering all supported formats, tiebreaks, undo, and score synchronization.
+
+## 4. Player and match setup
+
+Required setup fields:
+
+- My player name
+- Opponent name
+- Match format
+- First server
+- Ad scoring switch
+
+Optional setup fields:
+
+- USTA tournament URL
+- Tournament name and round
+- Match date, court, location, and notes
+- My Player Starting State
+- Opponent Starting State
+
+The tournament URL is stored with the match. Matches sharing a normalized tournament identifier or URL can be grouped for tournament analysis. Automated USTA-page import is not part of the MVP.
+
+### Mental-state choices
+
+- Positive
+- Focused
+- Tense
+- Frustrated
+- Disengaged
+- Not observed
+
+“Retired / stopped match” is stored separately as a match-status event, not as a mental state.
+
+## 5. Supported match formats
+
+### Best of 3 · Tiebreak sets
+
+- First to 6 games, win by 2.
+- A 7-point tiebreak is played at 6–6 in every set.
+- Tiebreak winner must win by 2 points.
+
+### Best of 3 · 10-point match tiebreak in the third
+
+- First two sets are first to 6 games, win by 2.
+- A 7-point tiebreak is played at 6–6.
+- A deciding third set is replaced by a 10-point match tiebreak, win by 2.
+
+### Best of 3 · Short sets to 4
+
+- First to 4 games.
+- A 7-point tiebreak is played at 3–3.
+- Tiebreak winner must win by 2 points.
+
+### Best of 3 · Short sets plus match tiebreak
+
+- First two sets are short sets to 4.
+- A 7-point tiebreak is played at 3–3.
+- A deciding third set is replaced by a 10-point match tiebreak, win by 2.
+
+### Pro 8
+
+- One set, first to 8 games and always win by 2 games.
+- No tiebreak.
+- Play continues until one player leads by 2 games.
+
+## 6. Game and tiebreak scoring
+
+The **Ad scoring** switch controls game scoring:
+
+- On: Love, 15, 30, 40, deuce, advantage, game. A player must win two consecutive points from deuce.
+- Off: Love, 15, 30, 40; the next point at 40–40 wins the game.
+
+At 5–5 in a standard set, play continues to 7–5 or 6–6. At 6–6, the configured tiebreak begins.
+
+In a tiebreak:
+
+- Points are numeric.
+- The first server serves one point.
+- The opponent serves the next two points.
+- Service then alternates every two points.
+- Players change ends after every six points.
+- A 7-point or 10-point tiebreak must be won by 2.
+
+The engine automatically determines games, sets, serving order, tiebreak mode, break points, holds, breaks, and match completion.
+
+## 7. Live scoreboard
+
+The tracking screen must always show:
+
+- Both player names
+- Serving player
+- All completed-set scores
+- Current-set game score
+- Current-game point score or numeric tiebreak score
+- Undo control
+- Mental-state indicator for my player
+- Access to score synchronization
+
+Two ball indicators represent the server's available serve attempts:
+
+- New point: two balls visible.
+- First fault: one ball is removed and the app moves to second serve.
+- Second fault: the final ball is removed, a double fault is recorded, and the receiver wins the point.
+- The next point restores both balls.
+
+## 8. Point-entry workflow
+
+### Stage A — Serve
+
+Choices:
+
+- Serve In
+- Fault
+- Ace
+
+Rules:
+
+- Serve In advances to point-winner entry.
+- Ace records a successful serve and awards the point to the server.
+- First Fault records a fault and advances to second serve.
+- Second Fault automatically records a double fault and awards the point to the receiver.
+
+### Stage B — Point winner
+
+Two large controls:
+
+- Point to my player
+- Point to opponent
+
+The score updates and saves immediately.
+
+### Stage C — Optional point ending
+
+No option is preselected.
+
+Row 1:
+
+- Return Winner
+- Return Error
+
+Row 2:
+
+- Winner
+- Forced Error
+- Unforced Error
+
+Selecting an outcome opens the optional details tray beneath **Skip details**.
+
+### Outcome attribution
+
+- Winner: final-stroke, shot-type, and advanced shot-type details belong to the point winner.
+- Return Winner: details belong to the point winner.
+- Return Error: details belong to the point loser.
+- Forced Error: details belong to the point loser.
+- Unforced Error: details belong to the point loser.
+
+The stored event separately identifies the point winner, point loser, server, receiver, outcome, responsible player, and benefiting player.
+
+### Rally length
+
+Ranges:
+
+- 1–5
+- 6–10
+- 11–20
+- 21+
+
+For Return Winner or Return Error, 1–5 is selected automatically. For all other outcomes, rally length starts unselected.
+
+### Final stroke
+
+No default:
+
+- Forehand
+- Backhand
+- Neither
+
+Final Stroke is presented on one line in the mobile experience.
+
+### Shot type
+
+No default.
+
+Row 1:
+
+- Groundstroke
+- Slice
+- Volley
+
+Row 2:
+
+- Drop Shot
+- Lob
+- Overhead
+
+### Shot type — Advanced
+
+Advanced shot type is optional and has no default.
+
+Row 1:
+
+- Passing Shot
+- Cross-Court
+
+Row 2:
+
+- Inside-Out
+- Inside-In
+
+Advanced options appear two per line.
+
+### Detail completion behavior
+
+The details tray contains four independent sections:
+
+1. Rally Length
+2. Final Stroke
+3. Shot Type
+4. Shot Type — Advanced
+
+If all four sections have selections, the app saves the details and automatically advances to the next point. If any section is incomplete, a clear **Continue to next point** action saves the available selections and advances without requiring the remaining optional values.
+
+## 9. Mental-state events
+
+Mental state is optional and can be recorded:
+
+- After any point
+- At the end of a game
+- At the end of a set
+- Manually whenever an observable change occurs
+
+The current state remains active until changed. End-of-game reminders are non-blocking.
+
+Each mental-state event stores:
+
+- Player ID
+- Observed state
+- Previous state
+- Timestamp and event sequence
+- Set, game, and point context
+- Current server
+- Linked most-recent point
+- Capture moment: after point, game end, set end, or manual
+- Optional reason and note
+
+These are parent observations, not psychological diagnoses.
+
+## 10. Missed-point recovery and corrections
+
+The parent can set:
+
+- The current live set's game score for each player
+- The current game's point score for each player, separately from games
+- Current server
+- Tiebreak score when applicable
+
+The score editor opens the current live set and shows completed sets as read-only context. Its game controls and point controls mirror the live scoreboard.
+
+If a corrected current-set score is a legal completed-set score, such as 6–4 or 7–5, the app marks the set complete, clears the current-game point score, saves the corrected set, and updates the live scoreboard. It then determines from the configured match format whether the match is complete or a new set should begin.
+
+If the corrected set score is 7–6, the app requires the final numeric tiebreak score before confirmation. The tiebreak winner must match the set winner and the tiebreak must be won by at least 2 points. The scoreboard preserves both the 7–6 set score and its tiebreak score.
+
+When the current live set is at 6–6 and its tiebreak is still in progress, the point editor switches from tennis points to numeric tiebreak points and applies the configured tiebreak target and win-by-2 rule.
+
+The app records a `score_sync` event rather than inventing missing points. The event contains the prior score snapshot, corrected score snapshot, current server, completed-set state, optional tiebreak score, format validation result, timestamp, and tracking-coverage impact. Unknown points are excluded from detailed statistics. The app displays estimated tracking coverage.
+
+### Point undo
+
+Undo operates on the latest saved point as one atomic group, not on the latest individual tap.
+
+- One tap undoes the most recently saved point.
+- The parent can undo up to five consecutive saved points.
+- There is no redo operation.
+- Each undo removes the point and every event linked to that point from active match projections, including serve attempts, point outcome, rally range, final stroke, shot type, advanced shot type, point-linked mental-state observation, and automatically derived game or set completion.
+- The live score, serving context, statistics, shot quality, tracking coverage, and point-by-point timeline are recomputed immediately after each undo.
+- After five available point groups have been consumed, no older point can be undone from the courtside Undo control.
+
+For event-log integrity, the implementation appends a `point_undone` event referencing the point group and marks its linked events voided. Voided events disappear from active views and ordinary statistics but remain identifiable in the lossless audit export. A later strategy request excludes them. A previously generated strategy review is marked stale if its dataset included an undone point.
+
+Corrections create compensating events that reference the affected event.
+
+## 11. Live statistics
+
+Live statistics compare both players and update after every event.
+
+### Score and points
+
+- Full match score
+- Total points won
+- Service points won
+- Return points won
+- Longest point-winning streak
+- Break points earned, converted, faced, and saved
+- Holds and breaks
+
+### Service
+
+- Aces
+- Double faults
+- First serves in
+- First-serve percentage
+- First-serve points won
+- Second-serve points won
+- Service games held and broken
+
+### Return
+
+- First-serve return points won
+- Second-serve return points won
+- Return winners
+- Return errors
+- Break points won
+
+### Shot statistics
+
+- Winners
+- Forced errors
+- Unforced errors
+- Forehand and backhand outcomes
+- Shot-type and advanced shot-type outcomes
+- Points won by rally-length range
+
+### Data quality
+
+- Estimated total points
+- Directly tracked points
+- Points with complete shot details
+- Number of score synchronizations
+
+## 12. Shot-quality metrics
+
+Shot quality is shown separately for each player using a player dropdown.
+
+Initial derived metrics:
+
+- Forehand impact
+- Backhand impact
+- Net conversion
+- Return quality
+- Outcomes by rally range
+
+Shot quality is based only on observed point-ending shots. It must not imply that every stroke in the rally was evaluated. Each metric displays its sample size and supporting calculation.
+
+## 13. Point-by-point match timeline
+
+Every recorded point appears in sequence and stores or derives:
+
+- Stable point ID and sequence number
+- Match timestamp
+- Set and game number
+- Score before and after
+- Server and receiver
+- Serve attempts and result
+- Point winner and loser
+- Point-ending outcome
+- Responsible player
+- Rally-length range
+- Final-stroke player and selection
+- Shot-type player and selection
+- Advanced shot-type player and optional selection
+- Active mental-state context for both players
+- Whether the point was tracked, corrected, imported, or reconstructed
+
+Mental-state changes, score synchronizations, game completion, set completion, corrections, and retirements also appear in the timeline.
+
+## 14. On-demand LLM strategy review
+
+The strategy review can be requested at any point in the match or afterward. It is not limited to set completion. Its usefulness should improve as data coverage grows.
+
+Canonical analysis question:
+
+> Given the collected dataset for both my player and the opponent through the current point, what is the recommended strategy for my player?
+
+The request includes:
+
+- Score context and match format
+- Service and return statistics for both players
+- Point outcomes and rally ranges
+- Final-stroke, shot-type, and optional advanced shot-type data
+- Shot-quality metrics
+- Mental-state observations
+- Momentum and score-pressure context
+- Missing-data and coverage information
+
+Every recommendation must:
+
+- Be supported by visible statistics or event evidence.
+- Distinguish observation from inference.
+- State material data limitations.
+- Avoid psychological or medical diagnoses.
+- Include a reminder to follow applicable tournament coaching rules.
+
+Every generated review stores:
+
+- Review ID and match ID
+- Data cutoff event sequence
+- Included event IDs or deterministic dataset version
+- Model provider and model identifier
+- Prompt-template version
+- Request timestamp and response timestamp
+- Generated response
+- Evidence references
+- Coverage summary
+
+Match tracking remains offline. Strategy requests require connectivity and can be queued until a connection is available. No child or match data is sent to an LLM without explicit user action.
+
+## 15. Authoritative event model
+
+The app uses immutable, ordered events. Minimum event types:
+
+- `match_created`
+- `match_started`
+- `serve_attempted`
+- `point_completed`
+- `mental_state_changed`
+- `score_synced`
+- `event_corrected`
+- `point_undone`
+- `game_completed`
+- `set_completed`
+- `match_completed`
+- `player_retired`
+- `strategy_requested`
+- `strategy_generated`
+
+Every event contains:
+
+- Event ID
+- Match ID
+- Schema version
+- Monotonic sequence number
+- Event type
+- Timestamp
+- Source: tracked, automatic, corrected, imported, or analysis
+- Actor or subject player IDs when applicable
+- Payload specific to the event
+- Reference to a corrected or preceding event when applicable
+
+The point-completion event contains a score snapshot before and after the point plus all observed point details. Derived projections can always be rebuilt from the event log.
+
+## 16. Offline persistence and recovery
+
+- Every action is saved immediately to IndexedDB.
+- An unfinished match resumes after refresh, browser termination, or device restart.
+- Match tracking works without network access.
+- The UI clearly shows local-save and analysis-connectivity state.
+- Background synchronization cannot change the local event order.
+
+## 17. Data portability
+
+The MVP exports one match or all matches as a portable bundle containing:
+
+- `matches.csv`
+- `points.csv`
+- `serves.csv`
+- `shots.csv`
+- `mental_states.csv`
+- `score_syncs.csv`
+- `events.json`
+- `schema.json`
+
+Requirements:
+
+- Lossless JSON event history
+- Analysis-friendly CSV tables
+- Stable IDs and schema versioning
+- Re-import support
+- Optional anonymization of player and opponent names
+- No vendor lock-in
+
+## 18. Privacy
+
+- Match and mental-state data remain on the device by default.
+- External analysis is always user initiated.
+- Exports can be anonymized.
+- Observed mental states are labeled as subjective observations.
+- The product does not make psychological, medical, or diagnostic claims.
+
+## 19. MVP acceptance criteria
+
+The MVP is complete when:
+
+1. All supported formats score correctly through match completion.
+2. Advantage, no-ad, 7-point tiebreak, and 10-point match-tiebreak behavior pass automated tests.
+3. First and second faults update the two-ball indicator and double faults award the point automatically.
+4. Either player can win a point and receive correct serve, return, outcome, shot, and error attribution.
+5. Optional details can be skipped without delaying the next point.
+6. Mental state can be recorded after a point or at game/set boundaries for either player.
+7. A missed-score synchronization resumes tracking without inventing point details.
+8. Undo removes the latest point and all linked events, supports up to five consecutive point undos, offers no redo, immediately recomputes the live match, and preserves an auditable void record.
+9. The scoreboard shows all completed sets, the current set, and current point score.
+10. Live statistics update for both players and disclose data coverage.
+11. Shot-quality metrics can be viewed separately for either player.
+12. Every tracked point appears in a point-by-point timeline.
+13. An interrupted match resumes offline from its last saved event.
+14. JSON and CSV exports reproduce the complete event history.
+15. An on-demand strategy request uses both players' data and records its model, prompt, cutoff, evidence, and coverage.
+16. Primary courtside controls meet a minimum 44 × 44 CSS-pixel touch target.
+
+## 20. Future enhancements
+
+- Persistent player profiles, with at least one dedicated profile for my player/son
+- Saved opponent profiles and opponent history
+- Encrypted cloud backup and cross-device synchronization
+- Automated USTA tournament metadata import when permitted
+- Tournament, season, and opponent trend analysis
+- Apple Watch input
+- Native iOS packaging or SwiftUI client
+- Live sharing with another spectator
+- Video synchronization and court-placement diagrams
+- Advanced coaching and practice-plan generation
+
+## 21. Experience reference
+
+`baseline-clickthrough.html` is the canonical MVP experience reference for layout, terminology, control grouping, point-entry order, mobile touch sizing, live-stat presentation, timeline presentation, and on-demand strategy review.
+
+The click-through contains illustrative data and does not persist matches. The production implementation must follow this specification when prototype behavior and underlying data integrity differ.
