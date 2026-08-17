@@ -1,0 +1,13 @@
+{
+  "name": "Baseline Tennis Tracker",
+  "short_name": "Baseline",
+  "description": "Fast, offline-first tennis match tracking for courtside parents.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f5f1e8",
+  "theme_color": "#102c2c",
+  "orientation": "portrait",
+  "icons": [
+    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
