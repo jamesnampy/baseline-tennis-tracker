@@ -408,16 +408,10 @@ async function handleLiveRequest(request: Request, env: ApiEnv, segments: string
   if (!token) return notFound();
   if (request.method !== "GET") return json({ error: "Method not allowed." }, 405);
 
-
   const link = await findShareLinkByHash(db, await hashShareToken(token));
   // A revoked, expired, or unknown token is answered identically, so a probe
   // cannot tell "wrong token" from "link you no longer have access to".
   if (!link || !isLinkUsable(link)) return json({ error: "This link is no longer available." }, 404);
-
-  const match = await loadMatch(db, link.match_id);
-  if (!match) return json({ error: "This link is no longer available." }, 404);
-  const visible = redactMatch(match, link);
-  const score = projectScore(visible.events, visible.config);
 
   if (segments.length === 3 && segments[2] === "socket") {
     if (!env.MATCH_ROOM) return json({ error: "Live updates are not enabled for this deployment." }, 503);
@@ -437,14 +431,18 @@ async function handleLiveRequest(request: Request, env: ApiEnv, segments: string
     const sinceSeq = Number(url.searchParams.get("sinceSeq") ?? 0) || 0;
     const rows = await listEventRows(db, link.match_id, { sinceSeq });
     return json({
-      matchId: visible.id,
+      matchId: link.match_id,
       events: redactEvents(rows.map(eventFromRow), link),
       latestServerSeq: rows.at(-1)?.server_seq ?? sinceSeq,
-      complete: score.matchComplete,
     });
   }
 
   if (segments.length !== 2) return notFound();
+
+  const match = await loadMatch(db, link.match_id);
+  if (!match) return json({ error: "This link is no longer available." }, 404);
+  const visible = redactMatch(match, link);
+  const score = projectScore(visible.events, visible.config);
 
   return json({
     apiVersion: API_VERSION,

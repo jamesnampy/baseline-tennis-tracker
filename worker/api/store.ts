@@ -146,9 +146,12 @@ export async function appendEvents(db: D1Database, matchId: string, events: Matc
     return { accepted: 0, duplicates: 0, latestServerSeq: await latestServerSeq(db, matchId) };
   }
 
+  // Scoped to the ids being pushed rather than the whole match: this runs after
+  // every point, and a three-hour match holds well over a thousand events.
+  const placeholders = events.map((_, index) => "?" + (index + 2)).join(", ");
   const existing = await db
-    .prepare("SELECT id FROM match_events WHERE match_id = ?1")
-    .bind(matchId)
+    .prepare("SELECT id FROM match_events WHERE match_id = ?1 AND id IN (" + placeholders + ")")
+    .bind(matchId, ...events.map((event) => event.id))
     .all<{ id: string }>();
   const known = new Set(existing.results.map((row) => row.id));
   const fresh = events.filter((event) => !known.has(event.id));

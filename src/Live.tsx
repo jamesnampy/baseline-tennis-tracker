@@ -84,6 +84,8 @@ export default function Live({ token }: { token: string }) {
           if (!response.ok) return;
           const payload = (await response.json()) as { events: MatchEvent[]; latestServerSeq: number };
           applyEvents(payload.events, payload.latestServerSeq);
+          // Match completion is derived from the events themselves, so there is
+          // nothing extra to ask the server for.
         } catch { /* Keep polling; a spectator's connection is not the tracker's problem. */ }
       }, 5000);
     };
