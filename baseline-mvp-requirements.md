@@ -721,12 +721,13 @@ The click-through contains illustrative data and does not persist matches. The p
 
 **Requested:** pull tournament, match, and opponent data for the tracked player from USTA, using the account holder's credentials and the player's USTA ID, so match setup is populated rather than retyped.
 
-**Status: analysed, not scheduled.** `docs/usta-data-integration.md` holds the full analysis, covering USTA and Universal Tennis as routes to the same data. Summary:
+**Status: analysed, not scheduled.** `docs/usta-data-integration.md` holds the full analysis. Summary:
 
+- **The data is needed before a match, not after.** What setup wants is the draw — who the player is about to face, in which round. That rules out every downstream source, including Universal Tennis, which receives completed results after a tournament posts them and holds no draws at all.
 - A USTA API exists (USTA Connect) and carries the required data, but access is a vetted commercial partnership, not available to individuals, and its documentation is behind a login.
-- Scraping the public site is prohibited by USTA's Terms of Use.
+- Scraping the draw page is prohibited by USTA's Terms of Use.
 - Driving the site with the account holder's own credentials is also automated access, would reintroduce third-party credential storage that the authentication design deliberately removed, and may not reach the data at all — USTA displays results only for players thirteen or older with their own profile.
-- Universal Tennis is the more promising route: it imports junior tournament results at scale, publishes a developer application with a stated fee, and authorises through the player linking their own account rather than through stored credentials. Whether its read side exposes match history or only ratings and profile is the open question, and it is answerable from public documentation before any fee is paid.
+- The only option aligned with the moment of need is a **user-supplied import**: the parent is already viewing the draw when the data is required, so Baseline parses what they share or paste and never contacts USTA. Available today, no permission needed, but brittle and name-matched rather than ID-matched.
 
 If access is ever granted, the integration must satisfy:
 
@@ -736,4 +737,4 @@ If access is ever granted, the integration must satisfy:
 - The importer sits behind an interface with at least two implementations, so a user-supplied paste importer and a hosted API importer are interchangeable and neither is assumed.
 - Import is user-initiated and its coverage contribution is disclosed like any other data source.
 
-A user-supplied import — the user pastes a page or URL they are already looking at, and Baseline parses it without contacting USTA — is the only form available today. It is a separate requirement and should be scoped on its own merits, not as a substitute for the above.
+A user-supplied import — the user shares or pastes a draw they are already looking at, and Baseline parses it without contacting USTA — is the only form available today, and the only one that delivers data at the moment setup needs it. It is a separate requirement and should be scoped on its own merits.
