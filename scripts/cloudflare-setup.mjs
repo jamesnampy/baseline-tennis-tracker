@@ -27,6 +27,7 @@ const PBKDF2_ITERATIONS = 210_000;
 const MIN_PASSWORD_LENGTH = 12;
 
 const dryRun = process.argv.includes("--dry-run");
+const resetPassword = process.argv.includes("--reset-password");
 
 const style = {
   step: (text) => console.log(`\n[1m[36m▸ ${text}[0m`),
@@ -217,13 +218,27 @@ async function ensurePassword(rl) {
   style.step("Setting the account password");
   const exists = secretExists("AUTH_PASSWORD_HASH");
   if (exists === "no-worker") return "pending-deploy";
-  if (exists === true) {
+  if (exists === true && !resetPassword) {
     style.skip("Already set. Re-run with --reset-password to change it.");
     return null;
   }
+  if (exists === true) style.warn("Changing the password signs out every device.");
+
+  // Without a terminal there is nobody to prompt, and retrying on EOF would
+  // spin forever rather than failing.
+  if (!process.stdin.isTTY) {
+    style.warn("Setting a password needs an interactive terminal.");
+    console.log("\n  Run this directly in your terminal:\n");
+    console.log("      npm run setup:cloudflare\n");
+    return "pending-input";
+  }
 
   let password = "";
-  while (true) {
+  for (let attempt = 1; ; attempt += 1) {
+    if (attempt > 3) {
+      style.fail("Giving up after three attempts. Nothing was changed.");
+      return "pending-input";
+    }
     password = (await rl.question(`  Choose a password (at least ${MIN_PASSWORD_LENGTH} characters): `)).trim();
     if (password.length < MIN_PASSWORD_LENGTH) {
       style.warn(`Too short — ${MIN_PASSWORD_LENGTH} characters minimum.`);
@@ -301,6 +316,8 @@ async function main() {
 
   // Secrets need a Worker to live on, so nothing more can be done until the
   // first deploy has created one.
+  if (passwordState === "pending-input") return;
+
   if (passwordState === "pending-deploy" || tokenState === "pending-deploy") {
     style.skip("The Worker does not exist yet, so it has nothing to hold secrets.");
     console.log("\n  Deploy first, then run this again:\n");
