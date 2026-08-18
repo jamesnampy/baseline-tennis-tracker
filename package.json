@@ -13,7 +13,9 @@
     "test": "node --experimental-strip-types --test tests/*.test.mjs",
     "typecheck": "tsc --build",
     "lint": "eslint .",
-    "db:generate": "drizzle-kit generate"
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "wrangler d1 migrations apply baseline-tennis-tracker --remote",
+    "db:migrate:local": "wrangler d1 migrations apply baseline-tennis-tracker --local"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.117.1",

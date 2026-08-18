@@ -18,7 +18,10 @@
       "@/*": ["./*"]
     }
   },
-  // `db/` is intentionally excluded until a D1 binding exists in wrangler.jsonc;
-  // it is unused scaffolding for the cloud-sync phase and cannot typecheck yet.
-  "include": ["worker/**/*.ts"]
+  // The Worker projects scores and statistics with the same `lib/tennis/` code the
+  // client uses, so spectators and the API never see a second scoring engine.
+  // `db/` stays out: it is the Drizzle migration source, not Worker runtime code.
+  "include": ["worker/**/*.ts", "lib/**/*.ts"],
+  // IndexedDB is the device's store and has no meaning in a Worker.
+  "exclude": ["lib/tennis/storage.ts"]
 }

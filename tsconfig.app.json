@@ -20,5 +20,8 @@
       "@/*": ["./*"]
     }
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx", "lib/**/*.ts", "tests/**/*.mjs"]
+  // `worker/api/share.ts` is Worker code but holds the share-link privacy rules,
+  // which are unit-tested from Node. It uses only web platform APIs, so it
+  // typechecks under the client project too.
+  "include": ["src/**/*.ts", "src/**/*.tsx", "lib/**/*.ts", "tests/**/*.mjs", "worker/api/share.ts"]
 }

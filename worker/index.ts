@@ -5,9 +5,10 @@
  * (see wrangler.jsonc). `run_worker_first` routes only `/api/*` here, so this
  * handler never needs to serve the client bundle itself.
  */
+import { API_PREFIX, handleApiRequest, type ApiEnv } from "./api/router.ts";
 import { handleStrategyRequest, type StrategyEnv } from "./strategy/index.ts";
 
-export interface Env extends StrategyEnv {
+export interface Env extends StrategyEnv, ApiEnv {
   ASSETS: Fetcher;
 }
 
@@ -17,6 +18,10 @@ export default {
 
     if (url.pathname === "/api/strategy") {
       return handleStrategyRequest(request, env);
+    }
+
+    if (url.pathname === API_PREFIX || url.pathname.startsWith(`${API_PREFIX}/`)) {
+      return handleApiRequest(request, env, url);
     }
 
     if (url.pathname.startsWith("/api/")) {

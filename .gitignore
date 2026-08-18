@@ -30,6 +30,9 @@ yarn-error.log*
 .env*
 !.env.example
 
+# local Worker secrets (SYNC_TOKEN, API keys)
+.dev.vars
+
 # vercel
 .vercel
 

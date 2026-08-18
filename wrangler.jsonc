@@ -13,5 +13,20 @@
     "not_found_handling": "single-page-application",
     // Everything except the API is served straight from assets.
     "run_worker_first": ["/api/*"]
-  }
+  },
+  // Hosted event store for cloud sync and live spectator links.
+  //
+  // Create it once with `npx wrangler d1 create baseline-tennis-tracker` and paste
+  // the returned id below, then apply the schema with `npm run db:migrate`. Until
+  // then the binding resolves to nothing locally and every /api/v1 route answers
+  // 503; tracking, export, and the strategy review are unaffected because the
+  // device remains the authoritative store during a match.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "baseline-tennis-tracker",
+      "database_id": "REPLACE_WITH_D1_DATABASE_ID",
+      "migrations_dir": "./drizzle"
+    }
+  ]
 }

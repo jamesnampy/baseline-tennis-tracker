@@ -52,6 +52,37 @@ Copy `.env.example` to `.env`, add a server-side `ANTHROPIC_API_KEY`, and option
 
 The analysis layer is vendor-neutral per the MVP requirements: `worker/strategy/types.ts` defines the provider interface, and adding a vendor means implementing it and registering it in `resolveProvider`. Nothing above that seam knows which model answered.
 
+## Optional cloud sync and the analysis API
+
+Hosted access is **off by default**. Without a `SYNC_TOKEN` secret every `/api/v1` route answers 503, no device data is reachable, and the tracker behaves exactly as it does today: IndexedDB is authoritative and everything works offline.
+
+To turn it on:
+
+```bash
+npx wrangler d1 create baseline-tennis-tracker   # paste the id into wrangler.jsonc
+npm run db:migrate                                # or db:migrate:local for wrangler dev
+npx wrangler secret put SYNC_TOKEN
+```
+
+The Worker then exposes the versioned, read-only contract from requirements section 17 at `/api/v1`, plus the one write route sync needs. `GET /api/v1/schema` documents every route and needs no credentials. Reads require `Authorization: Bearer <SYNC_TOKEN>`.
+
+`POST /api/v1/sync` is idempotent: events are keyed by their client-generated UUID, so replaying a queued outbox after a dropped connection inserts nothing new. The server assigns its own arrival sequence for cursors and never reorders the device's log.
+
+`db/schema.ts` is the schema authority and generates the migrations in `drizzle/`; the Worker itself uses D1's prepared-statement API and carries no ORM.
+
+## Share links
+
+`POST /api/v1/matches/:id/share` mints an unguessable read-only link scoped to one match. Links expire in 24 hours unless another window is requested, can be revoked at any time, and return their token exactly once — only a SHA-256 of it is stored.
+
+Redaction happens in the Worker, before anything leaves it:
+
+- Mental-state observations are excluded unless explicitly included, and their free-form notes are excluded even then.
+- The opponent shows as initials by default, or can be hidden entirely.
+- Private match notes and strategy reviews never travel on a link.
+- Revoked, expired, and unknown tokens are all answered identically.
+
+Spectators replay the same `lib/tennis/` projections the tracker uses, so there is no second scoring engine to keep in step.
+
 ## Deployment
 
 The app is a client-side SPA served from Cloudflare Workers Assets, with an API Worker handling `/api/*`.
@@ -65,9 +96,9 @@ Set `VITE_PUBLIC_ORIGIN` at build time (for example `https://baseline.example.co
 ## Project structure
 
 - `index.html` / `src/` — mobile experience (SPA entry point and UI)
-- `worker/` — Cloudflare Worker API and the pluggable strategy provider
+- `worker/` — Cloudflare Worker: the versioned analysis API, share-link redaction, and the pluggable strategy provider
 - `lib/tennis/` — scoring engine, event projections, analytics, storage, and export
-- `db/` — Drizzle scaffolding for the planned D1 event store (not yet wired up)
+- `db/` — Drizzle schema for the D1 event store; `drizzle/` holds its generated migrations
 - `public/` — PWA manifest and offline service worker
 - `tests/` — automated scoring-format and edge-case coverage
 - `baseline-mvp-requirements.md` — canonical functional requirements
