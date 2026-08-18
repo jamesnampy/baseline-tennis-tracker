@@ -53,17 +53,37 @@ Copy `.env.example` to `.env`, add a server-side `ANTHROPIC_API_KEY`, and option
 
 The analysis layer is vendor-neutral per the MVP requirements: `worker/strategy/types.ts` defines the provider interface, and adding a vendor means implementing it and registering it in `resolveProvider`. Nothing above that seam knows which model answered.
 
-## Optional cloud sync and the analysis API
+## Deploying to Cloudflare
 
-Hosted access is **off by default**. Without a `SYNC_TOKEN` secret every `/api/v1` route answers 503, no device data is reachable, and the tracker behaves exactly as it does today: IndexedDB is authoritative and everything works offline.
-
-To turn it on:
+Three commands. The first opens a browser and has to be run by hand; the other two are scripted.
 
 ```bash
-npx wrangler d1 create baseline-tennis-tracker   # paste the id into wrangler.jsonc
-npm run db:migrate                                # or db:migrate:local for wrangler dev
-npx wrangler secret put SYNC_TOKEN
+npx wrangler login          # interactive, once per machine
+npm run setup:cloudflare    # creates D1, writes its id, migrates, generates SYNC_TOKEN
+npm run deploy              # builds and publishes
 ```
+
+`setup:cloudflare` is safe to re-run — every step checks for its own result first, so a half-finished setup resumes rather than restarting. It never deploys, and it will not overwrite a `SYNC_TOKEN` it cannot first confirm is absent, because replacing a live one would silently stop every device already syncing. Pass `--dry-run` to see what it would do.
+
+It prints the generated `SYNC_TOKEN` once. Save it: Cloudflare cannot show it again, and it is what you paste into the app's Export screen to turn on cloud sync.
+
+`deploy` bakes the public origin into the build so social-preview images resolve to absolute URLs. On a brand-new worker that origin is not knowable until the first deploy has happened, so the first run deploys, reads the URL back, records it in `.env.production`, and builds again. Later runs are a single pass. Serving from a custom domain? Set `VITE_PUBLIC_ORIGIN` yourself first — the workers.dev URL would be the wrong origin to bake in.
+
+For the hosted AI strategy review, add the key any time:
+
+```bash
+npx wrangler secret put ANTHROPIC_API_KEY
+```
+
+### What deploying does and does not expose
+
+Publishing puts the tracker at a public URL, but not the data. Matches live in the browser's IndexedDB and never leave the device until cloud sync is switched on with the token. Every `/api/v1` route refuses a request without the bearer token, and answers 503 outright when `SYNC_TOKEN` is unset. Share links are the only public path to match data, and each one is scoped to a single match, redacted server-side, expiring, and revocable.
+
+To take a deployment down: `npx wrangler delete`. To cut off hosted access while leaving it up, delete the secret with `npx wrangler secret delete SYNC_TOKEN` — every API route reverts to 503 and the tracker keeps working offline.
+
+## Cloud sync and the analysis API
+
+Hosted access is **off by default**. Without a `SYNC_TOKEN` secret every `/api/v1` route answers 503, no device data is reachable, and the tracker behaves exactly as it does today: IndexedDB is authoritative and everything works offline.
 
 The Worker then exposes the versioned, read-only contract from requirements section 17 at `/api/v1`, plus the one write route sync needs. `GET /api/v1/schema` documents every route and needs no credentials. Reads require `Authorization: Bearer <SYNC_TOKEN>`.
 
@@ -105,15 +125,19 @@ One Durable Object per match serializes appends and fans new points out over a W
 
 Removing the Durable Object binding degrades cleanly: sync, the API, and share-link snapshots keep working, and only live push stops.
 
-## Deployment
+## Architecture
 
-The app is a client-side SPA served from Cloudflare Workers Assets, with an API Worker handling `/api/*`.
+The app is a client-side SPA served from Cloudflare Workers Assets. The Worker handles `/api/*` and `/report/*`; everything else is served straight from assets, with unknown paths falling back to `index.html` so deep links and the installed PWA resolve.
 
-```bash
-npm run deploy
-```
+| Binding | Purpose | Missing it means |
+|---|---|---|
+| `ASSETS` | The SPA bundle | Nothing is served |
+| `DB` (D1) | Event store behind sync, the API, and share links | `/api/v1` answers 503; tracking is unaffected |
+| `MATCH_ROOM` (Durable Object) | Per-match append ordering and live WebSocket fanout | Live push stops; sync, the API, and share snapshots keep working |
+| `SYNC_TOKEN` (secret) | The only credential for sync and the API | Hosted access stays off |
+| `ANTHROPIC_API_KEY` (secret) | Hosted strategy review | The on-device evidence review answers instead |
 
-Set `VITE_PUBLIC_ORIGIN` at build time (for example `https://baseline.example.com`) so social-preview images resolve to absolute URLs.
+Each degradation is deliberate, so a partial deployment is a reduced app rather than a broken one.
 
 ## Project structure
 
@@ -122,6 +146,7 @@ Set `VITE_PUBLIC_ORIGIN` at build time (for example `https://baseline.example.co
 - `lib/tennis/` — scoring engine, event projections, analytics, storage, and export
 - `db/` — Drizzle schema for the D1 event store; `drizzle/` holds its generated migrations
 - `public/` — PWA manifest and offline service worker
+- `scripts/` — Cloudflare provisioning and deploy helpers
 - `tests/` — automated scoring-format and edge-case coverage
 - `baseline-mvp-requirements.md` — canonical functional requirements
 - `baseline-clickthrough.html` — canonical interaction reference
