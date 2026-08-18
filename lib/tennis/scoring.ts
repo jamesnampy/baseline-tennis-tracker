@@ -5,6 +5,8 @@ import {
   PLAYER_INDEX,
 } from "./model.ts";
 import type {
+  GameCompletedEvent,
+  MatchCompletedEvent,
   MatchConfig,
   MatchEvent,
   MatchFormatId,
@@ -12,6 +14,7 @@ import type {
   PointCompletedEvent,
   PointDetails,
   ScoreState,
+  SetCompletedEvent,
 } from "./model.ts";
 
 export function initialScore(firstServer: PlayerKey): ScoreState {
@@ -218,9 +221,116 @@ export function projectScore(events: MatchEvent[], config: MatchConfig): ScoreSt
       score = applyPoint(score, event.payload.winner, config.format, config.adScoring);
     } else if (event.type === "score_synced") {
       score = deepCloneScore(event.payload.corrected);
+    } else if (event.type === "player_retired") {
+      // A retirement ends the match at whatever score has been recorded; it never
+      // invents games. game_completed/set_completed/match_completed are derived
+      // outputs and deliberately do not feed back into the projection.
+      score = deepCloneScore(event.payload.score);
+      score.matchComplete = true;
+      score.winner = event.payload.winner;
     }
   }
   return score;
+}
+
+/** 1-based set number the point was played in (requirements section 13). */
+export function pointSetNumber(point: PointCompletedEvent): number {
+  return point.payload.scoreBefore.sets.length + 1;
+}
+
+/**
+ * 1-based game number within the point's set. A tiebreak counts as the game
+ * after the last completed one; a 10-point match tiebreak reports game 1 of its
+ * own set because it replaces the deciding set entirely.
+ */
+export function pointGameNumber(point: PointCompletedEvent): number {
+  const before = point.payload.scoreBefore;
+  return before.games[0] + before.games[1] + 1;
+}
+
+export type DerivedCompletion =
+  | { type: "game_completed"; payload: GameCompletedEvent["payload"] }
+  | { type: "set_completed"; payload: SetCompletedEvent["payload"] }
+  | { type: "match_completed"; payload: MatchCompletedEvent["payload"] };
+
+const keyOf = (index: number): PlayerKey => (index === 0 ? "my" : "opponent");
+
+/**
+ * Diffs two score snapshots and returns the game, set, and match completions
+ * that happened between them, in order.
+ *
+ * `includeGames` is false for score synchronization: a correction can jump
+ * several games at once, and emitting one game_completed per jump would either
+ * lose games or invent them. Sets and match completion stay exact either way.
+ */
+export function derivedCompletions(
+  before: ScoreState,
+  after: ScoreState,
+  { includeGames = true }: { includeGames?: boolean } = {},
+): DerivedCompletion[] {
+  const completions: DerivedCompletion[] = [];
+  const setCompleted = after.sets.length > before.sets.length;
+  const completedSet = setCompleted ? after.sets[after.sets.length - 1] : undefined;
+  const setNumber = before.sets.length + 1;
+
+  const setWinnerIndex = after.setsWon[0] > before.setsWon[0] ? 0 : after.setsWon[1] > before.setsWon[1] ? 1 : -1;
+  const gamesPlayedBefore = before.games[0] + before.games[1];
+
+  if (includeGames) {
+    if (setCompleted && completedSet && !completedSet.isMatchTiebreak && setWinnerIndex >= 0) {
+      // The final game of a set is the one that completed it, tiebreaks included.
+      completions.push({
+        type: "game_completed",
+        payload: {
+          setNumber,
+          gameNumber: gamesPlayedBefore + 1,
+          winner: keyOf(setWinnerIndex),
+          server: before.server,
+          hold: keyOf(setWinnerIndex) === (before.inTiebreak ? before.tiebreakStartServer ?? before.server : before.server),
+          games: [...completedSet.games] as [number, number],
+          tiebreak: completedSet.tiebreak ? ([...completedSet.tiebreak] as [number, number]) : undefined,
+        },
+      });
+    } else if (!setCompleted) {
+      const gameWinnerIndex = after.games[0] > before.games[0] ? 0 : after.games[1] > before.games[1] ? 1 : -1;
+      if (gameWinnerIndex >= 0) {
+        completions.push({
+          type: "game_completed",
+          payload: {
+            setNumber,
+            gameNumber: gamesPlayedBefore + 1,
+            winner: keyOf(gameWinnerIndex),
+            server: before.server,
+            hold: keyOf(gameWinnerIndex) === before.server,
+            games: [...after.games] as [number, number],
+          },
+        });
+      }
+    }
+  }
+
+  if (setCompleted && completedSet && setWinnerIndex >= 0) {
+    completions.push({
+      type: "set_completed",
+      payload: {
+        setNumber,
+        winner: keyOf(setWinnerIndex),
+        games: [...completedSet.games] as [number, number],
+        tiebreak: completedSet.tiebreak ? ([...completedSet.tiebreak] as [number, number]) : undefined,
+        isMatchTiebreak: Boolean(completedSet.isMatchTiebreak),
+        setsWon: [...after.setsWon] as [number, number],
+      },
+    });
+  }
+
+  if (after.matchComplete && !before.matchComplete && after.winner) {
+    completions.push({
+      type: "match_completed",
+      payload: { winner: after.winner, reason: "score", score: deepCloneScore(after) },
+    });
+  }
+
+  return completions;
 }
 
 export function isBreakPoint(score: ScoreState, server: PlayerKey, adScoring: boolean): boolean {

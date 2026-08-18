@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { applyPoint, initialScore, numberedPointEvents, pointScoreLabel } from "../lib/tennis/scoring.ts";
+import { applyPoint, derivedCompletions, initialScore, numberedPointEvents, pointGameNumber, pointScoreLabel, pointSetNumber, projectScore } from "../lib/tennis/scoring.ts";
 import { eligiblePointOutcomes, hasCompleteShotDetails, isErrorOutcome, isPointOutcomeValid, pointDetailsPlayer, usesAdvancedShotOptions, usesBallLandingOptions } from "../lib/tennis/model.ts";
 import { buildStats, filterEventsForStatsScope, pointStatsScope } from "../lib/tennis/analytics.ts";
 import { buildPressureAnalytics } from "../lib/tennis/pressure.ts";
 import { createPlayerProfile, linkPlayerIdentity, playerProfileAnalytics, versionPlayerProfile } from "../lib/tennis/profiles.ts";
-import { buildExportBundle, zipFiles } from "../lib/tennis/export.ts";
+import { buildExportBundle, staleStrategyEventIds, zipFiles } from "../lib/tennis/export.ts";
 import { buildCoachReport } from "../lib/tennis/report.ts";
 
 const winPoint = (score, player, format = "best_of_3_tiebreak", ad = true) => applyPoint(score, player, format, ad);
@@ -178,4 +178,100 @@ test("Pro 8 has no tiebreak and requires a two-game margin", () => {
   score = winGame(score, "my", "pro_8"); assert.equal(score.matchComplete, false);
   score = winGame(score, "opponent", "pro_8"); score = winGame(score, "my", "pro_8"); score = winGame(score, "my", "pro_8");
   assert.equal(score.matchComplete, true); assert.deepEqual(score.sets[0].games, [10, 8]);
+});
+
+test("game completion is derived once per game and names the holder or breaker", () => {
+  const before = initialScore("my");
+  const after = winGame(before, "my");
+  const [game] = derivedCompletions(before, after);
+  assert.equal(game.type, "game_completed");
+  assert.deepEqual([game.payload.setNumber, game.payload.gameNumber], [1, 1]);
+  assert.equal(game.payload.winner, "my"); assert.equal(game.payload.hold, true);
+  const broken = derivedCompletions(before, winGame(before, "opponent"))[0];
+  assert.equal(broken.payload.hold, false);
+  // A point that does not end a game derives nothing at all.
+  assert.deepEqual(derivedCompletions(before, winPoint(before, "my")), []);
+});
+
+test("set and match completion derive together with the closing game", () => {
+  let score = winGames(initialScore("my"), "my", 5);
+  score = winGames(score, "opponent", 4);
+  const beforeSet = score;
+  const afterSet = winGame(beforeSet, "my");
+  assert.deepEqual(derivedCompletions(beforeSet, afterSet).map((event) => event.type), ["game_completed", "set_completed"]);
+  const set = derivedCompletions(beforeSet, afterSet)[1];
+  assert.deepEqual(set.payload.games, [6, 4]); assert.equal(set.payload.winner, "my"); assert.deepEqual(set.payload.setsWon, [1, 0]);
+
+  let second = winGames(afterSet, "my", 5);
+  second = winGames(second, "opponent", 4);
+  const final = winGame(second, "my");
+  const types = derivedCompletions(second, final).map((event) => event.type);
+  assert.deepEqual(types, ["game_completed", "set_completed", "match_completed"]);
+  assert.equal(derivedCompletions(second, final)[2].payload.reason, "score");
+});
+
+test("a set tiebreak derives one game plus the set and keeps its tiebreak score", () => {
+  // Alternate games: winning six straight would complete the set at 6-0 long before 6-6.
+  let score = initialScore("my");
+  for (let index = 0; index < 6; index += 1) { score = winGame(score, "my"); score = winGame(score, "opponent"); }
+  const before = score;
+  assert.equal(before.inTiebreak, true);
+  let after = before;
+  for (let index = 0; index < 7; index += 1) after = winPoint(after, "my");
+  const [game, set] = derivedCompletions(before, after);
+  assert.equal(game.type, "game_completed"); assert.deepEqual(game.payload.tiebreak, [7, 0]); assert.equal(game.payload.gameNumber, 13);
+  assert.equal(set.type, "set_completed"); assert.deepEqual(set.payload.games, [7, 6]); assert.deepEqual(set.payload.tiebreak, [7, 0]);
+});
+
+test("a match tiebreak completes a set without inventing a game", () => {
+  const before = { ...initialScore("my"), sets: [{ games: [6, 4] }, { games: [4, 6] }], setsWon: [1, 1], inTiebreak: true, tiebreakTarget: 10, tiebreakStartServer: "my" };
+  let after = before;
+  for (let index = 0; index < 10; index += 1) after = winPoint(after, "my", "best_of_3_match_tiebreak");
+  const types = derivedCompletions(before, after).map((event) => event.type);
+  assert.deepEqual(types, ["set_completed", "match_completed"]);
+  assert.equal(derivedCompletions(before, after)[0].payload.isMatchTiebreak, true);
+});
+
+test("score synchronization derives sets and match completion but never fabricates games", () => {
+  const before = initialScore("my");
+  const corrected = { ...initialScore("my"), sets: [{ games: [6, 3] }], setsWon: [1, 0] };
+  const types = derivedCompletions(before, corrected, { includeGames: false }).map((event) => event.type);
+  assert.deepEqual(types, ["set_completed"]);
+  assert.deepEqual(derivedCompletions(before, corrected, { includeGames: true }).map((event) => event.type), ["game_completed", "set_completed"]);
+});
+
+test("a point reports the set and game it was played in", () => {
+  const point = completedPoint("my");
+  assert.equal(pointSetNumber(point), 1); assert.equal(pointGameNumber(point), 1);
+  point.payload.scoreBefore.sets = [{ games: [6, 4] }]; point.payload.scoreBefore.games = [3, 2];
+  assert.equal(pointSetNumber(point), 2); assert.equal(pointGameNumber(point), 6);
+});
+
+test("a retirement ends the match without inventing points", () => {
+  const match = fixtureMatch();
+  const score = projectScore(match.events, match.config);
+  match.events.push({ id: "retire", matchId: match.id, schemaVersion: 1, sequence: 2, timestamp: new Date(4).toISOString(), source: "tracked", type: "player_retired", payload: { player: "opponent", winner: "my", score } });
+  const projected = projectScore(match.events, match.config);
+  assert.equal(projected.matchComplete, true); assert.equal(projected.winner, "my");
+  assert.equal(buildStats(match.events, match.config).directlyTrackedPoints, 1);
+});
+
+test("a strategy review goes stale once a point it analyzed is undone", () => {
+  const match = fixtureMatch();
+  const point = match.events[0];
+  match.events.push({ id: "review", matchId: match.id, schemaVersion: 1, sequence: 2, timestamp: new Date(5).toISOString(), source: "analysis", type: "strategy_generated", payload: { cutoffSequence: 2, provider: "on-device", model: "evidence-engine-v1", promptVersion: "strategy-v1", response: "x", evidence: [], coverage: 100 } });
+  assert.equal(staleStrategyEventIds(match).size, 0);
+  match.events.push({ id: "undo", matchId: match.id, schemaVersion: 1, sequence: 3, timestamp: new Date(6).toISOString(), source: "corrected", type: "point_undone", payload: { pointGroupId: point.pointGroupId, voidedEventIds: [point.id] } });
+  assert.deepEqual([...staleStrategyEventIds(match)], ["review"]);
+});
+
+test("the export bundle publishes derived game, set, status, and review tables", () => {
+  const match = fixtureMatch();
+  match.events.push({ id: "game-1", matchId: match.id, schemaVersion: 1, sequence: 2, timestamp: new Date(7).toISOString(), source: "automatic", type: "game_completed", pointGroupId: "group", payload: { setNumber: 1, gameNumber: 1, winner: "opponent", server: "my", hold: false, games: [0, 1] } });
+  match.events.push({ id: "set-1", matchId: match.id, schemaVersion: 1, sequence: 3, timestamp: new Date(8).toISOString(), source: "corrected", type: "set_completed", payload: { setNumber: 1, winner: "opponent", games: [4, 6], isMatchTiebreak: false, setsWon: [0, 1] } });
+  const bundle = buildExportBundle(match);
+  for (const name of ["games.csv", "sets.csv", "match_status.csv", "strategy_reviews.csv"]) assert.ok(name in bundle.files, name);
+  assert.match(bundle.files["games.csv"], /game-1/); assert.match(bundle.files["sets.csv"], /set-1/);
+  assert.match(bundle.files["points.csv"], /set_number/); assert.match(bundle.files["points.csv"], /game_number/);
+  assert.match(bundle.files["manifest.json"], /baseline-mvp-1\.2\.2/);
 });

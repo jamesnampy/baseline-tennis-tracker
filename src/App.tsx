@@ -12,8 +12,8 @@ import { createPlayerProfile, linkPlayerIdentity, playerProfileAnalytics, versio
 import { buildPressureAnalytics } from "@/lib/tennis/pressure";
 import { buildCoachReport, DEFAULT_REPORT_OPTIONS, type CoachReportOptions } from "@/lib/tennis/report";
 import {
-  activePointEvents, applyPoint, initialScore, numberedPointEvents, pointDetailsMap, pointScoreLabel,
-  projectScore, scoreSummary, voidedPointIds,
+  activePointEvents, applyPoint, derivedCompletions, initialScore, numberedPointEvents, pointDetailsMap, pointGameNumber,
+  pointScoreLabel, pointSetNumber, projectScore, scoreSummary, voidedPointIds,
 } from "@/lib/tennis/scoring";
 import { deleteMatch, loadIdentityMappings, loadMatches, loadPlayers, saveIdentityMapping, saveMatch, savePlayer } from "@/lib/tennis/storage";
 
@@ -158,7 +158,9 @@ function MatchTracker({ match, setMatch, players, mappings, saved, onExit }: { m
   function completePoint(winner: PlayerKey, serveResult: "in" | "ace" | "double_fault", faults: 0 | 1 | 2, pointGroupId: string, preceding: MatchEvent[]) {
     const after = applyPoint(score, winner, match.config.format, match.config.adScoring);
     const pointEvent: MatchEvent = { ...eventBase(match, preceding.length + 1), source: serveResult === "double_fault" ? "automatic" : "tracked", type: "point_completed", pointGroupId, payload: { winner, loser: otherPlayer(winner), server: score.server, receiver: otherPlayer(score.server), serveAttempt, serveResult, faults, scoreBefore: score, scoreAfter: after, mentalContext: mental } };
-    append([...preceding, pointEvent]); setUndoCount(0); if (serveResult === "ace" || serveResult === "double_fault") resetPointEntry(); else { setPendingPointId(pointGroupId); setStage("outcome"); }
+    // Game, set, and match completions carry the point group so a single undo voids them with the point.
+    const completions: MatchEvent[] = derivedCompletions(score, after).map((completion, index) => ({ ...eventBase(match, preceding.length + 2 + index), source: "automatic", pointGroupId, ...completion }));
+    append([...preceding, pointEvent, ...completions]); setUndoCount(0); if (serveResult === "ace" || serveResult === "double_fault") resetPointEntry(); else { setPendingPointId(pointGroupId); setStage("outcome"); }
   }
   function onServe(result: "in" | "fault" | "ace") {
     const pointGroupId = pendingPointId ?? makeId(); const serveEvent = makeServeEvent(pointGroupId, result, serveAttempt);
@@ -182,9 +184,13 @@ function MatchTracker({ match, setMatch, players, mappings, saved, onExit }: { m
   async function generateStrategy() {
     const fallback = strategyReview(stats, match.config);
     let result = { ...fallback, provider: "on-device", model: "evidence-engine-v1" };
+    const question = "Given the collected dataset for both my player and the opponent through the current point, what is the recommended strategy for my player?";
+    // Requirements section 15 pairs every review with its request. Both events are
+    // appended together after the round trip so a single setMatch keeps them ordered.
+    const requestId = makeId(); const requestedAt = new Date().toISOString(); const cutoffSequence = match.events.length;
     try {
       const response = await fetch("/api/strategy", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
-        question: "Given the collected dataset for both my player and the opponent through the current point, what is the recommended strategy for my player?",
+        question,
         dataset: { config: match.config, score, stats, mentalStates: mental, points: points.map((point) => ({ ...point.payload, details: detailMap.get(point.pointGroupId) })) },
       }) });
       if (response.ok) {
@@ -192,7 +198,10 @@ function MatchTracker({ match, setMatch, players, mappings, saved, onExit }: { m
         result = { response: payload.response, evidence: fallback.evidence, provider: payload.provider, model: payload.model };
       }
     } catch { /* Offline and unconfigured deployments use the transparent local fallback. */ }
-    append([{ ...eventBase(match), source: "analysis", type: "strategy_generated", payload: { cutoffSequence: match.events.length, provider: result.provider, model: result.model, promptVersion: "strategy-v1", response: result.response, evidence: result.evidence, coverage: stats.coverage } }]);
+    append([
+      { ...eventBase(match), timestamp: requestedAt, source: "analysis", type: "strategy_requested", payload: { requestId, cutoffSequence, question, promptVersion: "strategy-v1", coverage: stats.coverage } },
+      { ...eventBase(match, 2), source: "analysis", type: "strategy_generated", payload: { cutoffSequence, provider: result.provider, model: result.model, promptVersion: "strategy-v1", response: result.response, evidence: result.evidence, coverage: stats.coverage, requestId, requestedAt } },
+    ]);
     return result;
   }
   if (score.matchComplete && tab === "track") return <CompletedView match={match} score={score} stats={stats} saved={saved} onTab={setTab} onExit={onExit} />;
@@ -200,7 +209,7 @@ function MatchTracker({ match, setMatch, players, mappings, saved, onExit }: { m
     <Scoreboard match={match} score={score} onSync={() => setScoreModal(true)} /><section className="tracker-content">{stage === "serve" && <ServeStage score={score} config={match.config} serveAttempt={serveAttempt} onServe={onServe} />}{stage === "winner" && <WinnerStage config={match.config} onWinner={chooseWinner} />}{stage === "outcome" && <OutcomeStage allowedOutcomes={pendingPoint ? eligiblePointOutcomes(pendingPoint) : []} onOutcome={chooseOutcome} onSkip={resetPointEntry} />}{stage === "details" && <DetailsTray details={details} setDetails={setDetails} onContinue={finishDetails} />}</section>
     <button className="mental-pill" onClick={() => setMentalModal("my")}><span className={`mental-dot ${mental.my}`} /> {match.config.myPlayerName} is {mentalLabels[mental.my].toLowerCase()} <b>Change</b></button><div className="connection-strip"><span>● {online ? "Online" : "Offline tracking"}</span><span>{stats.coverage}% tracked</span></div><BottomNav tab={tab} onTab={setTab} />
     {tab !== "track" && <div className="overlay-page"><button className="overlay-close" onClick={() => setTab("track")}>×</button>{tab === "stats" && <StatsView match={match} stats={stats} />}{tab === "timeline" && <TimelineView match={match} points={points} details={detailMap} />}{tab === "match" && <MatchView match={match} stats={stats} score={score} onExport={() => downloadExport(match, players, mappings)} onGenerate={generateStrategy} />}</div>}
-    {scoreModal && <ScoreSyncModal match={match} score={score} onClose={() => setScoreModal(false)} onSave={(corrected, reason) => { append([{ ...eventBase(match), source: "corrected", type: "score_synced", payload: { previous: score, corrected, reason, valid: true } }]); setScoreModal(false); resetPointEntry(); }} />}
+    {scoreModal && <ScoreSyncModal match={match} score={score} onClose={() => setScoreModal(false)} onSave={(corrected, reason) => { const completions: MatchEvent[] = derivedCompletions(score, corrected, { includeGames: false }).map((completion, index) => ({ ...eventBase(match, index + 2), source: "corrected", ...completion })); append([{ ...eventBase(match), source: "corrected", type: "score_synced", payload: { previous: score, corrected, reason, valid: true } }, ...completions]); setScoreModal(false); resetPointEntry(); }} />}
     {mentalModal && <MentalModal key={mentalModal} player={mentalModal} current={mental[mentalModal]} config={match.config} onClose={() => setMentalModal(undefined)} onSave={(state, note) => { append([{ ...eventBase(match), source: "tracked", type: "mental_state_changed", payload: { player: mentalModal, state, previousState: mental[mentalModal], captureMoment: pendingPointId ? "after_point" : "manual", linkedPointGroupId: pendingPointId, score, note } }]); setMentalModal(undefined); }} onSwitch={setMentalModal} />}
   </main>;
 }
@@ -248,7 +257,52 @@ function StatsView({ match, stats }: { match: MatchRecord; stats: ReturnType<typ
   return <section className="full-view"><p className="eyebrow">LIVE MATCH DATA</p><h1>Live stats</h1><div className="stats-scope-tabs" role="group" aria-label="Stats scope">{scopeOptions.map((option)=><button className={scope===option.id?"selected":""} key={option.id} onClick={()=>setScope(option.id)}>{option.label}</button>)}</div><div className="coverage-card"><span><strong>{viewStats.coverage}%</strong><small>tracking coverage</small></span><span><strong>{viewStats.directlyTrackedPoints}</strong><small>points captured</small></span><span><strong>{viewStats.completeShotDetails}</strong><small>complete shots</small></span></div><div className="stats-table"><div className="stats-head"><strong>{match.config.myPlayerName}</strong><span>STAT</span><strong>{match.config.opponentName}</strong></div>{rows.map(([label, left, right]) => <div className="stat-row" key={String(label)}><b>{left}</b><span>{label}</span><b>{right}</b></div>)}</div><div className="shot-quality"><div className="section-heading"><div><p className="eyebrow">OBSERVED POINT ENDINGS</p><h2>Shot quality</h2></div><select value={shotPlayer} onChange={(event) => setShotPlayer(event.target.value as PlayerKey)}><option value="my">{match.config.myPlayerName}</option><option value="opponent">{match.config.opponentName}</option></select></div><div className="quality-grid"><Metric label="Forehand impact" value={shot.forehandOutcomes} sample={shot.forehandOutcomes} /><Metric label="Backhand impact" value={shot.backhandOutcomes} sample={shot.backhandOutcomes} /><Metric label="Return quality" value={shot.returnWinners - shot.returnErrors} sample={shot.returnWinners + shot.returnErrors} /><Metric label="Short-rally wins" value={shot.rallyWins["1-5"]} sample={Object.values(shot.rallyWins).reduce((a, b) => a + b, 0)} /></div><p className="fine-print">Based only on observed point-ending shots—not every stroke in the rally.</p></div><div className="shot-quality advanced-quality"><div className="section-heading"><div><p className="eyebrow">SELECTED SHOT DETAILS</p><h2>Shot quality — Advanced</h2></div></div><section className="advanced-stat-card"><h3>Shot type outcomes</h3><div className="advanced-stat-head"><span>SHOT</span><span>WON</span><span>ERRORS</span><span>OBSERVED</span></div>{shotTypes.map((type) => { const result = shot.shotTypeOutcomes[type]; return <div className="advanced-stat-row" key={type}><strong>{shotLabels[type]}</strong><b>{result.winners}</b><b>{result.errors}</b><small>n={result.total}</small></div>; })}</section><section className="advanced-stat-card"><h3>Winner patterns</h3><div className="winner-pattern-grid">{winnerPatterns.map((pattern) => <span key={pattern}><strong>{shot.winnerPatterns[pattern]}</strong><small>{shotLabels[pattern]}</small></span>)}</div></section><p className="fine-print">Won includes observed winners, return winners, and forced errors credited to the point winner. Errors include return and unforced errors. Winner patterns count only Winner and Return Winner points.</p></div></section>;
 }
 function Metric({ label, value, sample }: { label: string; value: number; sample: number }) { return <div><span>{label}</span><strong>{value >= 0 ? "+" : ""}{value}</strong><small>n={sample}</small></div>; }
-function TimelineView({ match, points, details }: { match: MatchRecord; points: ReturnType<typeof activePointEvents>; details: Map<string, PointDetails> }) { const numbered = numberedPointEvents(match.events); return <section className="full-view"><p className="eyebrow">EVERY SAVED POINT</p><h1>Match timeline</h1>{!points.length ? <div className="empty-card"><strong>No points yet</strong><p>Each completed point will appear here with its score context.</p></div> : <div className="timeline">{[...numbered].reverse().map(({ point, pointNumber }) => { const detail = details.get(point.pointGroupId); return <article key={point.id}><div className={`timeline-dot ${point.payload.winner}`} /><div><p>Point {pointNumber} · {new Date(point.timestamp).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</p><h3>{playerName(match.config, point.payload.winner)} won · {detail?.outcome ? outcomeLabels[detail.outcome] : point.payload.serveResult === "in" ? "Outcome not added" : outcomeLabels[point.payload.serveResult]}</h3><span>{playerName(match.config, point.payload.server)} serving · {scoreSummary(point.payload.scoreAfter, match.config)}</span>{detail && <small>{[detail.rallyRange, detail.finalStroke && shotLabels[detail.finalStroke], detail.ballLanding && `Landed ${shotLabels[detail.ballLanding]}`, detail.shotType && shotLabels[detail.shotType], detail.shotSituation && shotLabels[detail.shotSituation], detail.advancedShotType && shotLabels[detail.advancedShotType]].filter(Boolean).join(" · ")}</small>}</div></article>; })}</div>}</section>; }
+interface TimelineEntry { id: string; dot: string; eyebrow: string; title: string; context: string; detail?: string }
+
+/**
+ * Requirements section 13: mental-state changes, score synchronizations, game and
+ * set completion, corrections, and retirements share the point timeline. Voided
+ * point groups are excluded from this active view but remain in the audit export.
+ */
+function timelineEntries(match: MatchRecord, details: Map<string, PointDetails>): TimelineEntry[] {
+  const voided = voidedPointIds(match.events);
+  const numbers = new Map(numberedPointEvents(match.events).map(({ point, pointNumber }) => [point.pointGroupId, pointNumber]));
+  const time = (value: string) => new Date(value).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  const name = (player: PlayerKey) => playerName(match.config, player);
+  const entries: TimelineEntry[] = [];
+  for (const event of match.events) {
+    if ("pointGroupId" in event && event.pointGroupId && voided.has(event.pointGroupId)) continue;
+    if (event.type === "point_completed") {
+      const detail = details.get(event.pointGroupId);
+      entries.push({
+        id: event.id, dot: event.payload.winner,
+        eyebrow: `Point ${numbers.get(event.pointGroupId) ?? "—"} · Set ${pointSetNumber(event)} · Game ${pointGameNumber(event)} · ${time(event.timestamp)}`,
+        title: `${name(event.payload.winner)} won · ${detail?.outcome ? outcomeLabels[detail.outcome] : event.payload.serveResult === "in" ? "Outcome not added" : outcomeLabels[event.payload.serveResult]}`,
+        context: `${name(event.payload.server)} serving · ${scoreSummary(event.payload.scoreAfter, match.config)}`,
+        detail: detail && [detail.rallyRange, detail.finalStroke && shotLabels[detail.finalStroke], detail.ballLanding && `Landed ${shotLabels[detail.ballLanding]}`, detail.shotType && shotLabels[detail.shotType], detail.shotSituation && shotLabels[detail.shotSituation], detail.advancedShotType && shotLabels[detail.advancedShotType]].filter(Boolean).join(" · "),
+      });
+    } else if (event.type === "game_completed") {
+      entries.push({ id: event.id, dot: "event", eyebrow: `Game · Set ${event.payload.setNumber} · Game ${event.payload.gameNumber}`, title: `${name(event.payload.winner)} ${event.payload.tiebreak ? "wins the tiebreak" : event.payload.hold ? "holds" : "breaks"}`, context: `Games ${event.payload.games[0]}–${event.payload.games[1]}${event.payload.tiebreak ? ` · tiebreak ${event.payload.tiebreak[0]}–${event.payload.tiebreak[1]}` : ""}` });
+    } else if (event.type === "set_completed") {
+      entries.push({ id: event.id, dot: "event", eyebrow: `Set ${event.payload.setNumber} complete`, title: `${name(event.payload.winner)} takes the ${event.payload.isMatchTiebreak ? "match tiebreak" : `set ${event.payload.games[0]}–${event.payload.games[1]}`}`, context: `Sets ${event.payload.setsWon[0]}–${event.payload.setsWon[1]}${event.payload.tiebreak ? ` · tiebreak ${event.payload.tiebreak[0]}–${event.payload.tiebreak[1]}` : ""}` });
+    } else if (event.type === "match_completed") {
+      entries.push({ id: event.id, dot: "event", eyebrow: "Match complete", title: `${name(event.payload.winner)} wins`, context: `${scoreSummary(event.payload.score, match.config)}${event.payload.reason === "retirement" ? " · opponent retired" : ""}` });
+    } else if (event.type === "player_retired") {
+      entries.push({ id: event.id, dot: "event", eyebrow: "Retirement", title: `${name(event.payload.player)} retired`, context: `${name(event.payload.winner)} advances · ${scoreSummary(event.payload.score, match.config)}`, detail: event.payload.note });
+    } else if (event.type === "mental_state_changed") {
+      entries.push({ id: event.id, dot: "event", eyebrow: `Observed state · ${time(event.timestamp)}`, title: `${name(event.payload.player)} — ${mentalLabels[event.payload.state].toLowerCase()}`, context: `Was ${mentalLabels[event.payload.previousState].toLowerCase()} · captured at ${event.payload.captureMoment.replaceAll("_", " ")}`, detail: event.payload.note });
+    } else if (event.type === "score_synced") {
+      entries.push({ id: event.id, dot: "event", eyebrow: `Score synchronized · ${time(event.timestamp)}`, title: event.payload.reason, context: `${scoreSummary(event.payload.previous, match.config)} → ${scoreSummary(event.payload.corrected, match.config)}`, detail: "Unknown points are excluded from detailed statistics." });
+    } else if (event.type === "point_undone") {
+      entries.push({ id: event.id, dot: "event", eyebrow: `Undo · ${time(event.timestamp)}`, title: "Point undone", context: `${event.payload.voidedEventIds.length} linked events voided and kept in the audit export.` });
+    } else if (event.type === "event_corrected") {
+      entries.push({ id: event.id, dot: "event", eyebrow: `Correction · ${time(event.timestamp)}`, title: event.payload.reason, context: `Corrects event ${event.correctsEventId}` });
+    }
+  }
+  return entries;
+}
+
+function TimelineView({ match, points, details }: { match: MatchRecord; points: ReturnType<typeof activePointEvents>; details: Map<string, PointDetails> }) { const entries = useMemo(() => timelineEntries(match, details), [match, details]); return <section className="full-view"><p className="eyebrow">EVERY SAVED POINT</p><h1>Match timeline</h1>{!points.length ? <div className="empty-card"><strong>No points yet</strong><p>Each completed point will appear here with its score context.</p></div> : <div className="timeline">{[...entries].reverse().map((entry) => <article key={entry.id}><div className={`timeline-dot ${entry.dot}`} /><div><p>{entry.eyebrow}</p><h3>{entry.title}</h3><span>{entry.context}</span>{entry.detail && <small>{entry.detail}</small>}</div></article>)}</div>}</section>; }
 function MatchView({ match, stats, score, onExport, onGenerate }: { match: MatchRecord; stats: ReturnType<typeof buildStats>; score: ScoreState; onExport: () => void; onGenerate: () => Promise<{ response: string; evidence: string[]; provider: string; model: string }> }) {
   const [review, setReview] = useState<{ response: string; evidence: string[]; provider: string; model: string }>(); const [loading, setLoading] = useState(false);
   async function askForReview() { setLoading(true); const next = await onGenerate(); setReview(next); setLoading(false); }

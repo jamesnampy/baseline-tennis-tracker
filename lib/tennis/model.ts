@@ -1,3 +1,6 @@
+/** Bumped whenever the exported dataset shape changes. Exports and reports must agree. */
+export const DATASET_VERSION = "baseline-mvp-1.2.2";
+
 export type PlayerKey = "my" | "opponent";
 export type PlayerRole = "my_player" | "opponent" | "guest";
 
@@ -121,7 +124,9 @@ export interface EventBase {
   schemaVersion: 1;
   sequence: number;
   timestamp: string;
-  source: "tracked" | "automatic" | "corrected" | "analysis";
+  source: "tracked" | "automatic" | "corrected" | "imported" | "analysis";
+  /** Requirements section 15: reference to a corrected or preceding event. */
+  correctsEventId?: string;
 }
 
 export interface MatchCreatedEvent extends EventBase {
@@ -195,6 +200,17 @@ export interface PointUndoneEvent extends EventBase {
   payload: { pointGroupId: string; voidedEventIds: string[] };
 }
 
+export interface StrategyRequestedEvent extends EventBase {
+  type: "strategy_requested";
+  payload: {
+    requestId: string;
+    cutoffSequence: number;
+    question: string;
+    promptVersion: string;
+    coverage: number;
+  };
+}
+
 export interface StrategyEvent extends EventBase {
   type: "strategy_generated";
   payload: {
@@ -205,6 +221,76 @@ export interface StrategyEvent extends EventBase {
     response: string;
     evidence: string[];
     coverage: number;
+    /** Links back to the strategy_requested event. Absent on reviews captured before schema 1.2.2. */
+    requestId?: string;
+    requestedAt?: string;
+  };
+}
+
+/**
+ * Derived completion events (requirements section 15). These are projections of
+ * the score, appended as `automatic` events so the timeline, exports, and the
+ * hosted API all see game, set, and match boundaries without recomputing them.
+ *
+ * A completion caused by a point carries that point's `pointGroupId`, so undo
+ * voids it with the rest of the point group and no separate rule is needed.
+ */
+export interface GameCompletedEvent extends EventBase {
+  type: "game_completed";
+  pointGroupId?: string;
+  payload: {
+    setNumber: number;
+    gameNumber: number;
+    winner: PlayerKey;
+    server: PlayerKey;
+    /** True when the game's server won it. Meaningless for tiebreak games; see `tiebreak`. */
+    hold: boolean;
+    games: [number, number];
+    tiebreak?: [number, number];
+  };
+}
+
+export interface SetCompletedEvent extends EventBase {
+  type: "set_completed";
+  pointGroupId?: string;
+  payload: {
+    setNumber: number;
+    winner: PlayerKey;
+    games: [number, number];
+    tiebreak?: [number, number];
+    isMatchTiebreak: boolean;
+    setsWon: [number, number];
+  };
+}
+
+export interface MatchCompletedEvent extends EventBase {
+  type: "match_completed";
+  pointGroupId?: string;
+  payload: {
+    winner: PlayerKey;
+    reason: "score" | "retirement";
+    score: ScoreState;
+  };
+}
+
+/** Requirements section 4: retirement is a match-status event, never a mental state. */
+export interface PlayerRetiredEvent extends EventBase {
+  type: "player_retired";
+  payload: {
+    player: PlayerKey;
+    winner: PlayerKey;
+    score: ScoreState;
+    note?: string;
+  };
+}
+
+/** Requirements section 10: corrections are compensating events referencing the affected event. */
+export interface EventCorrectedEvent extends EventBase {
+  type: "event_corrected";
+  correctsEventId: string;
+  payload: {
+    reason: string;
+    changes: Record<string, unknown>;
   };
 }
 
@@ -217,6 +303,12 @@ export type MatchEvent =
   | MentalStateEvent
   | ScoreSyncedEvent
   | PointUndoneEvent
+  | GameCompletedEvent
+  | SetCompletedEvent
+  | MatchCompletedEvent
+  | PlayerRetiredEvent
+  | EventCorrectedEvent
+  | StrategyRequestedEvent
   | StrategyEvent;
 
 export interface MatchRecord {

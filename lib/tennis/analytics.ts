@@ -195,7 +195,9 @@ export function filterEventsForStatsScope(events: MatchEvent[], config: MatchCon
   if (scope === "total") return events;
   const pointIds = new Set(activePointEvents(events).filter((point) => pointStatsScope(point, config) === scope).map((point) => point.pointGroupId));
   return events.filter((event) => {
-    if ("pointGroupId" in event) return pointIds.has(event.pointGroupId);
+    // Derived completion events carry the point group when a point caused them and
+    // none when a score sync did; only the former belong to a point's scope.
+    if ("pointGroupId" in event && event.pointGroupId) return pointIds.has(event.pointGroupId);
     if (event.type === "score_synced") {
       const syntheticPoint = { payload: { scoreBefore: event.payload.previous } } as PointCompletedEvent;
       return pointStatsScope(syntheticPoint, config) === scope;
