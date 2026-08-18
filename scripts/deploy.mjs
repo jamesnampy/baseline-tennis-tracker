@@ -52,10 +52,14 @@ const viteBin = () => localBin("vite", "bin", "vite.js");
  * `npm.cmd run build` fails with EINVAL. Running vite's own entry script with
  * node sidesteps the shim entirely and behaves the same on every platform.
  */
-const build = () => {
+const build = (origin) => {
+  // The origin has to reach the build as an environment variable. Resolving it
+  // here and only printing it is how the first deploy shipped a relative
+  // og:image while claiming to build for the custom domain.
+  const env = origin ? { ...process.env, VITE_PUBLIC_ORIGIN: origin } : process.env;
   const bin = viteBin();
-  if (bin) return execFileSync(process.execPath, [bin, "build"], { encoding: "utf8", stdio: "inherit" });
-  return execFileSync("npm", ["run", "build"], { encoding: "utf8", stdio: "inherit", shell: true });
+  if (bin) return execFileSync(process.execPath, [bin, "build"], { encoding: "utf8", stdio: "inherit", env });
+  return execFileSync("npm", ["run", "build"], { encoding: "utf8", stdio: "inherit", shell: true, env });
 };
 
 const deploy = ({ capture = false } = {}) => {
@@ -157,7 +161,7 @@ function main() {
   const known = recordedOrigin();
 
   style.step(known ? `Building for ${known}` : "Building (public origin not yet known)");
-  build();
+  build(known);
 
   style.step("Deploying to Cloudflare");
   const output = deploy({ capture: !known });
@@ -178,7 +182,7 @@ function main() {
   recordOrigin(url);
   style.ok(`Discovered ${url} and recorded it in ${ENV_FILE}`);
   style.step("Rebuilding with the real origin and redeploying");
-  build();
+  build(url);
   deploy();
   style.ok(`Deployed. Open ${url}`);
   console.log(`\n  [90mThis two-pass build only happens once. Later deploys reuse ${ENV_FILE}.[0m\n`);
