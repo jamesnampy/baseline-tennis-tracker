@@ -50,3 +50,21 @@ test("the public origin resolves to the custom domain, host only", () => {
   assert.equal(configuredCustomDomain("{}"), "");
   assert.equal(configuredCustomDomain("not json at all"), "");
 });
+
+test("combining CSVs keeps one header and every row", async () => {
+  const { combineCsv, folderName } = await import("../scripts/pull-data.mjs");
+  const a = '"match_id","point"\n"m1","1"\n"m1","2"\n';
+  const b = '"match_id","point"\n"m2","1"\n';
+  const merged = combineCsv([a, b]);
+  assert.equal(merged, '"match_id","point"\n"m1","1"\n"m1","2"\n"m2","1"\n');
+  assert.equal(combineCsv([]), "");
+  // A table only one match has still comes through whole.
+  assert.equal(combineCsv([b]), b);
+  // Mismatched headers would silently corrupt a merged table, so refuse.
+  assert.throws(() => combineCsv([a, '"different","header"\n"x","y"\n']), /headers differ/);
+
+  assert.equal(folderName({ config: { date: "2026-08-18", opponentName: "Noah Vandermeer" } }), "2026-08-18-noah-vandermeer");
+  assert.equal(folderName({ createdAt: "2026-01-02T10:00:00.000Z", config: {} }), "2026-01-02-opponent");
+  // Punctuation must not escape into a path.
+  assert.equal(folderName({ config: { date: "2026-08-18", opponentName: "A/B .. C" } }), "2026-08-18-a-b-c");
+});

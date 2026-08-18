@@ -11,6 +11,7 @@
     "preview": "vite preview",
     "setup:cloudflare": "node scripts/cloudflare-setup.mjs",
     "deploy": "node scripts/deploy.mjs",
+    "pull": "node scripts/pull-data.mjs",
     "deploy:raw": "vite build && wrangler deploy",
     "test": "node --experimental-strip-types --test tests/*.test.mjs",
     "typecheck": "tsc --build",

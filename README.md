@@ -118,6 +118,24 @@ The Worker then exposes the versioned, read-only contract from requirements sect
 
 `db/schema.ts` is the schema authority and generates the migrations in `drizzle/`; the Worker itself uses D1's prepared-statement API and carries no ORM.
 
+## Getting the data onto another machine
+
+Matches are tracked on one device and pushed to D1. To pull the whole dataset down somewhere else — a laptop, for analysis — without that machine syncing matches into its own app:
+
+```bash
+BASELINE_TOKEN=<SYNC_TOKEN> npm run pull
+```
+
+This is what the bearer token is for: the app signs in with a password, scripts authenticate with the token. It writes to `./baseline-data` (gitignored):
+
+- `matches.json` — every match's metadata, final score, and coverage
+- `combined/*.csv` — every match stitched into one table per topic, each row carrying its `match_id`, joinable against `combined/matches.csv` for tournament and opponent
+- `matches/<date>-<opponent>/` — each match's full bundle, including the lossless `events.json`
+
+The combined tables are plain concatenation of identical-header CSVs, not a summary, so nothing is lost on the way. Re-running overwrites: the event log is append-only, so the newest download is always the complete one.
+
+`BASELINE_URL` overrides the deployment (it defaults to the custom domain in `wrangler.jsonc`), and `BASELINE_OUT` overrides the output directory.
+
 ## Share links
 
 `POST /api/v1/matches/:id/share` mints an unguessable read-only link scoped to one match. Links expire in 24 hours unless another window is requested, can be revoked at any time, and return their token exactly once — only a SHA-256 of it is stored.

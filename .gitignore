@@ -33,6 +33,9 @@ yarn-error.log*
 # local Worker secrets (SYNC_TOKEN, API keys)
 .dev.vars
 
+# downloaded match data: a child's match history, never committed
+/baseline-data/
+
 # vercel
 .vercel
 
