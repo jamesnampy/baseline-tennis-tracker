@@ -57,7 +57,9 @@ export type ShotType =
   | "drop_shot"
   | "lob"
   | "overhead";
+export type ShotSituation = "approach_shot" | "passing_shot";
 export type AdvancedShotType =
+  // passing_shot remains readable for events captured before schema 1.2.1.
   | "passing_shot"
   | "cross_court"
   | "inside_out"
@@ -106,6 +108,7 @@ export interface PointDetails {
   finalStroke?: FinalStroke;
   ballLanding?: BallLanding;
   shotType?: ShotType;
+  shotSituation?: ShotSituation;
   advancedShotType?: AdvancedShotType;
   responsiblePlayer?: PlayerKey;
   benefitingPlayer?: PlayerKey;
@@ -309,6 +312,17 @@ export function isPointOutcomeValid(point: PointCompletedEvent, outcome: PointOu
 
 export function isErrorOutcome(outcome?: PointOutcome): boolean {
   return outcome === "return_error" || outcome === "forced_error" || outcome === "unforced_error";
+}
+
+export function hasCompleteShotDetails(details: PointDetails): boolean {
+  return Boolean(
+    details.rallyRange &&
+    details.finalStroke &&
+    details.shotType &&
+    details.shotSituation &&
+    details.advancedShotType &&
+    (!isErrorOutcome(details.outcome) || details.ballLanding),
+  );
 }
 
 export const deepCloneScore = (score: ScoreState): ScoreState =>

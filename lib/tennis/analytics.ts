@@ -1,10 +1,11 @@
-import { otherPlayer } from "./model.ts";
+import { FORMAT_RULES, hasCompleteShotDetails, isErrorOutcome, otherPlayer } from "./model.ts";
 import type {
   MatchConfig,
   MatchEvent,
   PlayerKey,
   PointCompletedEvent,
   PointDetails,
+  ShotType,
 } from "./model.ts";
 import { activePointEvents, isBreakPoint, pointDetailsMap } from "./scoring.ts";
 
@@ -32,6 +33,8 @@ export interface PlayerStats {
   forehandOutcomes: number;
   backhandOutcomes: number;
   rallyWins: Record<string, number>;
+  shotTypeOutcomes: Record<ShotType, { winners: number; errors: number; total: number }>;
+  winnerPatterns: Record<"approach_shot" | "passing_shot" | "cross_court" | "inside_out" | "inside_in", number>;
 }
 
 export interface MatchStats {
@@ -69,6 +72,15 @@ function emptyPlayerStats(): PlayerStats {
     forehandOutcomes: 0,
     backhandOutcomes: 0,
     rallyWins: { "1-5": 0, "6-10": 0, "11-20": 0, "21+": 0 },
+    shotTypeOutcomes: {
+      groundstroke: { winners: 0, errors: 0, total: 0 },
+      slice: { winners: 0, errors: 0, total: 0 },
+      volley: { winners: 0, errors: 0, total: 0 },
+      drop_shot: { winners: 0, errors: 0, total: 0 },
+      lob: { winners: 0, errors: 0, total: 0 },
+      overhead: { winners: 0, errors: 0, total: 0 },
+    },
+    winnerPatterns: { approach_shot: 0, passing_shot: 0, cross_court: 0, inside_out: 0, inside_in: 0 },
   };
 }
 
@@ -155,13 +167,40 @@ function applyDetails(
   if (details.outcome === "unforced_error") player.unforcedErrors += 1;
   if (details.finalStroke === "forehand") player.forehandOutcomes += 1;
   if (details.finalStroke === "backhand") player.backhandOutcomes += 1;
+  const winningOutcome = details.outcome === "winner" || details.outcome === "return_winner";
+  if (details.shotType) {
+    const breakdown = player.shotTypeOutcomes[details.shotType];
+    breakdown.total += 1;
+    if (winningOutcome) breakdown.winners += 1;
+    if (isErrorOutcome(details.outcome)) breakdown.errors += 1;
+  }
+  if (winningOutcome) {
+    if (details.shotSituation) player.winnerPatterns[details.shotSituation] += 1;
+    if (details.advancedShotType) player.winnerPatterns[details.advancedShotType] += 1;
+  }
   if (details.rallyRange) stats[point.payload.winner].rallyWins[details.rallyRange] += 1;
-  if (
-    details.rallyRange &&
-    details.finalStroke &&
-    details.shotType &&
-    details.advancedShotType
-  ) stats.completeShotDetails += 1;
+  if (hasCompleteShotDetails(details)) stats.completeShotDetails += 1;
+}
+
+export type StatsScope = "total" | `set_${number}` | "match_tiebreak";
+
+export function pointStatsScope(point: PointCompletedEvent, config: MatchConfig): StatsScope {
+  const score = point.payload.scoreBefore;
+  if (FORMAT_RULES[config.format].matchTiebreakThird && score.inTiebreak && score.tiebreakTarget === 10 && score.sets.length >= 2) return "match_tiebreak";
+  return `set_${score.sets.length + 1}`;
+}
+
+export function filterEventsForStatsScope(events: MatchEvent[], config: MatchConfig, scope: StatsScope): MatchEvent[] {
+  if (scope === "total") return events;
+  const pointIds = new Set(activePointEvents(events).filter((point) => pointStatsScope(point, config) === scope).map((point) => point.pointGroupId));
+  return events.filter((event) => {
+    if ("pointGroupId" in event) return pointIds.has(event.pointGroupId);
+    if (event.type === "score_synced") {
+      const syntheticPoint = { payload: { scoreBefore: event.payload.previous } } as PointCompletedEvent;
+      return pointStatsScope(syntheticPoint, config) === scope;
+    }
+    return false;
+  });
 }
 
 export function percentage(numerator: number, denominator: number): string {

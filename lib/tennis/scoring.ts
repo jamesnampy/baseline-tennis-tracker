@@ -195,6 +195,10 @@ export function activePointEvents(events: MatchEvent[]): PointCompletedEvent[] {
   );
 }
 
+export function numberedPointEvents(events: MatchEvent[]) {
+  return activePointEvents(events).map((point, index) => ({ point, pointNumber: index + 1 }));
+}
+
 export function pointDetailsMap(events: MatchEvent[]): Map<string, PointDetails> {
   const voided = voidedPointIds(events);
   const details = new Map<string, PointDetails>();

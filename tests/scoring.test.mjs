@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { applyPoint, initialScore, pointScoreLabel } from "../lib/tennis/scoring.ts";
-import { eligiblePointOutcomes, isErrorOutcome, isPointOutcomeValid } from "../lib/tennis/model.ts";
+import { applyPoint, initialScore, numberedPointEvents, pointScoreLabel } from "../lib/tennis/scoring.ts";
+import { eligiblePointOutcomes, hasCompleteShotDetails, isErrorOutcome, isPointOutcomeValid } from "../lib/tennis/model.ts";
+import { buildStats, filterEventsForStatsScope, pointStatsScope } from "../lib/tennis/analytics.ts";
 import { buildPressureAnalytics } from "../lib/tennis/pressure.ts";
 import { createPlayerProfile, linkPlayerIdentity, playerProfileAnalytics, versionPlayerProfile } from "../lib/tennis/profiles.ts";
 import { buildExportBundle, zipFiles } from "../lib/tennis/export.ts";
@@ -41,6 +42,21 @@ test("ball landing is collected only for error endings", () => {
   for (const outcome of ["return_winner", "winner", "ace", "double_fault"]) assert.equal(isErrorOutcome(outcome), false);
 });
 
+test("advanced tray requires one selection from each advanced row before auto-advance", () => {
+  const base = { outcome:"winner",rallyRange:"1-5",finalStroke:"forehand",shotType:"groundstroke" };
+  assert.equal(hasCompleteShotDetails({ ...base, shotSituation:"approach_shot" }), false);
+  assert.equal(hasCompleteShotDetails({ ...base, advancedShotType:"cross_court" }), false);
+  assert.equal(hasCompleteShotDetails({ ...base, shotSituation:"approach_shot",advancedShotType:"cross_court" }), true);
+  assert.equal(hasCompleteShotDetails({ ...base,outcome:"unforced_error",shotSituation:"passing_shot",advancedShotType:"inside_out" }), false);
+  assert.equal(hasCompleteShotDetails({ ...base,outcome:"unforced_error",ballLanding:"long",shotSituation:"passing_shot",advancedShotType:"inside_out" }), true);
+});
+
+test("timeline point numbers increase by one regardless of event sequence", () => {
+  const first = completedPoint("my"); first.id="point-1"; first.pointGroupId="group-1"; first.sequence=3;
+  const second = completedPoint("opponent"); second.id="point-2"; second.pointGroupId="group-2"; second.sequence=9;
+  assert.deepEqual(numberedPointEvents([first,second]).map(({pointNumber})=>pointNumber),[1,2]);
+});
+
 test("pressure analytics use score-before-point samples and disclose coverage", () => {
   const pressure = buildPressureAnalytics(fixtureMatch());
   assert.equal(pressure.opponent.played, 1); assert.equal(pressure.opponent.won, 1);
@@ -59,12 +75,35 @@ test("analysis ZIP contains complete vendor-neutral files and API contract", () 
   const bundle = buildExportBundle(fixtureMatch(), [], [], true);
   for (const name of ["matches.csv","players.csv","identity_mappings.csv","points.csv","serves.csv","shots.csv","mental_states.csv","score_syncs.csv","events.json","schema.json","manifest.json"]) assert.ok(name in bundle.files,name);
   assert.match(bundle.files["schema.json"], /read-only/); assert.doesNotMatch(bundle.files["matches.csv"], /Ethan|Noah/); assert.doesNotMatch(bundle.files["events.json"], /Ethan|Noah/);
+  assert.match(bundle.files["points.csv"], /point_number/); assert.match(bundle.files["shots.csv"], /shot_situation/);
   assert.ok(zipFiles(bundle.files).size > 100);
 });
 
 test("coach report respects privacy options and remains self-contained", () => {
-  const html = buildCoachReport(fixtureMatch(), {opponentIdentity:false,tournamentLink:false,timeline:false,mentalStates:false,mentalNotes:false,recommendations:false});
-  assert.match(html,/noindex,nofollow/); assert.doesNotMatch(html,/Noah/); assert.doesNotMatch(html,/Point timeline/); assert.match(html,/dataset baseline-mvp-1.2/);
+  const match=fixtureMatch(); match.config.tournamentName="Private event"; match.config.tournamentUrl="https://example.com/private";
+  const html = buildCoachReport(match, {opponentIdentity:false,matchStats:false,timeline:false,mentalStates:false,mentalNotes:false,recommendations:false});
+  assert.match(html,/noindex,nofollow/); assert.doesNotMatch(html,/Noah/); assert.doesNotMatch(html,/Point timeline|Match stats|https:\/\//); assert.match(html,/dataset baseline-mvp-1.2/);
+});
+
+test("advanced stats break shot types into errors and winner patterns", () => {
+  const match=fixtureMatch(); const point=match.events[0];
+  match.events.push({id:"annotation-1",matchId:match.id,schemaVersion:1,sequence:2,timestamp:new Date(1).toISOString(),source:"tracked",type:"point_annotated",pointGroupId:point.pointGroupId,payload:{outcome:"unforced_error",finalStrokePlayer:"my",shotType:"slice",shotSituation:"passing_shot",advancedShotType:"inside_out"}});
+  const winner=completedPoint("my"); winner.id="winner"; winner.pointGroupId="winner-group"; winner.sequence=3; match.events.push(winner,{id:"annotation-2",matchId:match.id,schemaVersion:1,sequence:4,timestamp:new Date(2).toISOString(),source:"tracked",type:"point_annotated",pointGroupId:winner.pointGroupId,payload:{outcome:"winner",finalStrokePlayer:"my",shotType:"groundstroke",shotSituation:"approach_shot",advancedShotType:"cross_court"}});
+  const stats=buildStats(match.events,match.config);
+  assert.equal(stats.my.shotTypeOutcomes.slice.errors,1); assert.equal(stats.my.shotTypeOutcomes.groundstroke.winners,1);
+  assert.equal(stats.my.winnerPatterns.approach_shot,1); assert.equal(stats.my.winnerPatterns.cross_court,1); assert.equal(stats.my.winnerPatterns.inside_out,0);
+});
+
+test("stats can be scoped to each set, match tiebreak, or total", () => {
+  const match=fixtureMatch(); match.config.format="best_of_3_match_tiebreak"; const first=match.events[0];
+  const second=completedPoint("my"); second.id="set-2"; second.pointGroupId="set-2-group"; second.sequence=2; second.payload.scoreBefore.sets=[{games:[6,4]}];
+  const decider=completedPoint("my"); decider.id="match-tb"; decider.pointGroupId="match-tb-group"; decider.sequence=3; decider.payload.scoreBefore.sets=[{games:[6,4]},{games:[4,6]}]; decider.payload.scoreBefore.inTiebreak=true; decider.payload.scoreBefore.tiebreakTarget=10;
+  match.events=[first,second,decider];
+  assert.equal(pointStatsScope(first,match.config),"set_1"); assert.equal(pointStatsScope(second,match.config),"set_2"); assert.equal(pointStatsScope(decider,match.config),"match_tiebreak");
+  assert.equal(buildStats(filterEventsForStatsScope(match.events,match.config,"set_1"),match.config).directlyTrackedPoints,1);
+  assert.equal(buildStats(filterEventsForStatsScope(match.events,match.config,"set_2"),match.config).directlyTrackedPoints,1);
+  assert.equal(buildStats(filterEventsForStatsScope(match.events,match.config,"match_tiebreak"),match.config).directlyTrackedPoints,1);
+  assert.equal(buildStats(filterEventsForStatsScope(match.events,match.config,"total"),match.config).directlyTrackedPoints,3);
 });
 
 test("advantage scoring requires a two-point margin after deuce", () => {

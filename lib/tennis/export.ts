@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/ban-ts-comment */
 // @ts-nocheck -- DOM BlobPart typings reject generic Uint8Array buffers that browsers accept.
 import type { IdentityMapping, MatchEvent, MatchRecord, PlayerProfile } from "./model.ts";
-import { activePointEvents, pointDetailsMap, voidedPointIds } from "./scoring.ts";
+import { activePointEvents, numberedPointEvents, pointDetailsMap, voidedPointIds } from "./scoring.ts";
 import { buildCoachReport, DEFAULT_REPORT_OPTIONS, type CoachReportOptions } from "./report.ts";
 const DATASET_VERSION = "baseline-mvp-1.2";
 const cell = (value: unknown) => `"${(value == null ? "" : typeof value === "object" ? JSON.stringify(value) : String(value)).replaceAll('"', '""')}"`;
@@ -10,14 +10,14 @@ const anonymizedEvents = (match: MatchRecord) => JSON.parse(JSON.stringify(match
 
 export function buildExportBundle(matches: MatchRecord[] | MatchRecord, players: PlayerProfile[] = [], mappings: IdentityMapping[] = [], anonymize = false, report?: { match: MatchRecord; options: CoachReportOptions }) {
   const selected = Array.isArray(matches) ? matches : [matches];
-  const points = selected.flatMap((match) => activePointEvents(match.events).map((point) => ({ match, point, details: pointDetailsMap(match.events).get(point.pointGroupId) })));
+  const points = selected.flatMap((match) => numberedPointEvents(match.events).map(({ point, pointNumber }) => ({ match, point, pointNumber, details: pointDetailsMap(match.events).get(point.pointGroupId) })));
   const files: Record<string, string> = {
     "matches.csv": csv(["match_id","created_at","updated_at","my_player_id","opponent_id","my_player","opponent","format","ad_scoring","tournament_url"], selected.map((m) => [m.id,m.createdAt,m.updatedAt,m.config.myPlayerId,m.config.opponentId,anonymize?"Player 1":m.config.myPlayerName,anonymize?"Player 2":m.config.opponentName,m.config.format,m.config.adScoring,m.config.tournamentUrl])),
     "players.csv": csv(["player_id","display_name","role","aliases","created_at","updated_at","previous_version_id","handedness","usta_id","usta_url","notes"], players.map((p,i) => [p.id,anonymize?`Player ${i+1}`:p.displayName,p.role,anonymize?[]:p.aliases,p.createdAt,p.updatedAt,p.previousVersionId,p.handedness,anonymize?undefined:p.ustaId,anonymize?undefined:p.ustaUrl,anonymize?undefined:p.notes])),
     "identity_mappings.csv": csv(["mapping_id","from_player_id","to_player_id","kind","created_at"], mappings.map((m) => [m.id,m.fromPlayerId,m.toPlayerId,m.kind,m.createdAt])),
-    "points.csv": csv(["match_id","point_id","sequence","timestamp","server","receiver","winner","serve_result","score_before","score_after","outcome","rally_range"], points.map(({match,point,details}) => [match.id,point.pointGroupId,point.sequence,point.timestamp,point.payload.server,point.payload.receiver,point.payload.winner,point.payload.serveResult,point.payload.scoreBefore,point.payload.scoreAfter,details?.outcome,details?.rallyRange])),
+    "points.csv": csv(["match_id","point_id","point_number","event_sequence","timestamp","server","receiver","winner","serve_result","score_before","score_after","outcome","rally_range"], points.map(({match,point,pointNumber,details}) => [match.id,point.pointGroupId,pointNumber,point.sequence,point.timestamp,point.payload.server,point.payload.receiver,point.payload.winner,point.payload.serveResult,point.payload.scoreBefore,point.payload.scoreAfter,details?.outcome,details?.rallyRange])),
     "serves.csv": csv(["match_id","event_id","point_id","sequence","server","attempt","result","voided"], selected.flatMap((m) => { const voided=voidedPointIds(m.events); return m.events.filter((e) => e.type === "serve_attempted").map((e) => [m.id,e.id,e.pointGroupId,e.sequence,e.payload.server,e.payload.attempt,e.payload.result,voided.has(e.pointGroupId)]); })),
-    "shots.csv": csv(["match_id","point_id","outcome","responsible_player","final_stroke","ball_landing","shot_type","advanced_shot_type"], points.map(({match,point,details}) => [match.id,point.pointGroupId,details?.outcome,details?.responsiblePlayer,details?.finalStroke,details?.ballLanding,details?.shotType,details?.advancedShotType])),
+    "shots.csv": csv(["match_id","point_id","outcome","responsible_player","final_stroke","ball_landing","shot_type","shot_situation","advanced_shot_type"], points.map(({match,point,details}) => [match.id,point.pointGroupId,details?.outcome,details?.responsiblePlayer,details?.finalStroke,details?.ballLanding,details?.shotType,details?.shotSituation,details?.advancedShotType])),
     "mental_states.csv": csv(["match_id","event_id","sequence","player","state","capture_moment","point_id","note"], selected.flatMap((m) => m.events.filter((e) => e.type === "mental_state_changed").map((e) => [m.id,e.id,e.sequence,e.payload.player,e.payload.state,e.payload.captureMoment,e.payload.linkedPointGroupId,anonymize?undefined:e.payload.note]))),
     "score_syncs.csv": csv(["match_id","event_id","sequence","previous_score","corrected_score","reason","valid"], selected.flatMap((m) => m.events.filter((e) => e.type === "score_synced").map((e) => [m.id,e.id,e.sequence,e.payload.previous,e.payload.corrected,e.payload.reason,e.payload.valid]))),
     "events.json": JSON.stringify(selected.map((m) => ({ matchId:m.id,events:anonymize?anonymizedEvents(m):m.events })),null,2),
