@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { applyPoint, initialScore, pointScoreLabel } from "../lib/tennis/scoring.ts";
-import { eligiblePointOutcomes, isPointOutcomeValid } from "../lib/tennis/model.ts";
+import { eligiblePointOutcomes, isErrorOutcome, isPointOutcomeValid } from "../lib/tennis/model.ts";
 import { buildPressureAnalytics } from "../lib/tennis/pressure.ts";
 import { createPlayerProfile, linkPlayerIdentity, playerProfileAnalytics, versionPlayerProfile } from "../lib/tennis/profiles.ts";
 import { buildExportBundle, zipFiles } from "../lib/tennis/export.ts";
@@ -34,6 +34,11 @@ test("optional tray offers only the return outcome consistent with the point win
   const serverWon = completedPoint("my");
   assert.deepEqual(eligiblePointOutcomes(serverWon), ["return_error", "winner", "forced_error", "unforced_error"]);
   assert.equal(isPointOutcomeValid(serverWon, "return_winner"), false);
+});
+
+test("ball landing is collected only for error endings", () => {
+  for (const outcome of ["return_error", "forced_error", "unforced_error"]) assert.equal(isErrorOutcome(outcome), true);
+  for (const outcome of ["return_winner", "winner", "ace", "double_fault"]) assert.equal(isErrorOutcome(outcome), false);
 });
 
 test("pressure analytics use score-before-point samples and disclose coverage", () => {

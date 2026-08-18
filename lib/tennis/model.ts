@@ -49,6 +49,7 @@ export type PointOutcome =
 
 export type RallyRange = "1-5" | "6-10" | "11-20" | "21+";
 export type FinalStroke = "forehand" | "backhand" | "neither";
+export type BallLanding = "net" | "long" | "side";
 export type ShotType =
   | "groundstroke"
   | "slice"
@@ -103,6 +104,7 @@ export interface PointDetails {
   outcome?: PointOutcome;
   rallyRange?: RallyRange;
   finalStroke?: FinalStroke;
+  ballLanding?: BallLanding;
   shotType?: ShotType;
   advancedShotType?: AdvancedShotType;
   responsiblePlayer?: PlayerKey;
@@ -303,6 +305,10 @@ export function eligiblePointOutcomes(point: PointCompletedEvent): PointOutcome[
 
 export function isPointOutcomeValid(point: PointCompletedEvent, outcome: PointOutcome): boolean {
   return eligiblePointOutcomes(point).includes(outcome);
+}
+
+export function isErrorOutcome(outcome?: PointOutcome): boolean {
+  return outcome === "return_error" || outcome === "forced_error" || outcome === "unforced_error";
 }
 
 export const deepCloneScore = (score: ScoreState): ScoreState =>
