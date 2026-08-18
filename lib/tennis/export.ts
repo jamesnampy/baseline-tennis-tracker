@@ -1,66 +1,36 @@
-import type { MatchEvent, MatchRecord } from "./model.ts";
+/* eslint-disable @typescript-eslint/ban-ts-comment */
+// @ts-nocheck -- DOM BlobPart typings reject generic Uint8Array buffers that browsers accept.
+import type { IdentityMapping, MatchEvent, MatchRecord, PlayerProfile } from "./model.ts";
 import { activePointEvents, pointDetailsMap, voidedPointIds } from "./scoring.ts";
+import { buildCoachReport, DEFAULT_REPORT_OPTIONS, type CoachReportOptions } from "./report.ts";
+const DATASET_VERSION = "baseline-mvp-1.2";
+const cell = (value: unknown) => `"${(value == null ? "" : typeof value === "object" ? JSON.stringify(value) : String(value)).replaceAll('"', '""')}"`;
+const csv = (headers: string[], rows: unknown[][]) => [headers.map(cell).join(","), ...rows.map((row) => row.map(cell).join(","))].join("\n");
+const anonymizedEvents = (match: MatchRecord) => JSON.parse(JSON.stringify(match.events).replaceAll(JSON.stringify(match.config.myPlayerName), JSON.stringify("Player 1")).replaceAll(JSON.stringify(match.config.opponentName), JSON.stringify("Player 2"))) as MatchEvent[];
 
-function csvEscape(value: unknown): string {
-  const text = value == null ? "" : typeof value === "object" ? JSON.stringify(value) : String(value);
-  return `"${text.replaceAll('"', '""')}"`;
-}
-
-function csv(headers: string[], rows: unknown[][]): string {
-  return [headers.map(csvEscape).join(","), ...rows.map((row) => row.map(csvEscape).join(","))].join("\n");
-}
-
-export function buildExportBundle(match: MatchRecord) {
-  const points = activePointEvents(match.events);
-  const details = pointDetailsMap(match.events);
-  const voided = voidedPointIds(match.events);
-  const mental = match.events.filter((event) => event.type === "mental_state_changed");
-  const syncs = match.events.filter((event) => event.type === "score_synced");
-
+export function buildExportBundle(matches: MatchRecord[] | MatchRecord, players: PlayerProfile[] = [], mappings: IdentityMapping[] = [], anonymize = false, report?: { match: MatchRecord; options: CoachReportOptions }) {
+  const selected = Array.isArray(matches) ? matches : [matches];
+  const points = selected.flatMap((match) => activePointEvents(match.events).map((point) => ({ match, point, details: pointDetailsMap(match.events).get(point.pointGroupId) })));
   const files: Record<string, string> = {
-    "matches.csv": csv(
-      ["match_id", "created_at", "updated_at", "my_player", "opponent", "format", "ad_scoring", "tournament_url"],
-      [[match.id, match.createdAt, match.updatedAt, match.config.myPlayerName, match.config.opponentName, match.config.format, match.config.adScoring, match.config.tournamentUrl]],
-    ),
-    "points.csv": csv(
-      ["point_id", "sequence", "timestamp", "server", "winner", "serve_result", "score_before", "score_after", "outcome", "rally_range"],
-      points.map((point) => [point.pointGroupId, point.sequence, point.timestamp, point.payload.server, point.payload.winner, point.payload.serveResult, point.payload.scoreBefore, point.payload.scoreAfter, details.get(point.pointGroupId)?.outcome, details.get(point.pointGroupId)?.rallyRange]),
-    ),
-    "serves.csv": csv(
-      ["event_id", "point_id", "sequence", "server", "attempt", "result", "voided"],
-      match.events.filter((event) => event.type === "serve_attempted").map((event) => [event.id, event.pointGroupId, event.sequence, event.payload.server, event.payload.attempt, event.payload.result, voided.has(event.pointGroupId)]),
-    ),
-    "shots.csv": csv(
-      ["point_id", "outcome", "responsible_player", "final_stroke_player", "final_stroke", "shot_type", "advanced_shot_type"],
-      points.map((point) => {
-        const detail = details.get(point.pointGroupId);
-        return [point.pointGroupId, detail?.outcome, detail?.responsiblePlayer, detail?.finalStrokePlayer, detail?.finalStroke, detail?.shotType, detail?.advancedShotType];
-      }),
-    ),
-    "mental_states.csv": csv(
-      ["event_id", "sequence", "timestamp", "player", "state", "previous_state", "capture_moment", "point_id", "note"],
-      mental.map((event) => [event.id, event.sequence, event.timestamp, event.payload.player, event.payload.state, event.payload.previousState, event.payload.captureMoment, event.payload.linkedPointGroupId, event.payload.note]),
-    ),
-    "score_syncs.csv": csv(
-      ["event_id", "sequence", "timestamp", "previous_score", "corrected_score", "reason", "valid"],
-      syncs.map((event) => [event.id, event.sequence, event.timestamp, event.payload.previous, event.payload.corrected, event.payload.reason, event.payload.valid]),
-    ),
-    "events.json": JSON.stringify(match.events, null, 2),
-    "schema.json": JSON.stringify({ name: "Baseline tennis event bundle", schemaVersion: 1, generatedAt: new Date().toISOString(), files: ["matches.csv", "points.csv", "serves.csv", "shots.csv", "mental_states.csv", "score_syncs.csv", "events.json"] }, null, 2),
+    "matches.csv": csv(["match_id","created_at","updated_at","my_player_id","opponent_id","my_player","opponent","format","ad_scoring","tournament_url"], selected.map((m) => [m.id,m.createdAt,m.updatedAt,m.config.myPlayerId,m.config.opponentId,anonymize?"Player 1":m.config.myPlayerName,anonymize?"Player 2":m.config.opponentName,m.config.format,m.config.adScoring,m.config.tournamentUrl])),
+    "players.csv": csv(["player_id","display_name","role","aliases","created_at","updated_at","previous_version_id","handedness","usta_id","usta_url","notes"], players.map((p,i) => [p.id,anonymize?`Player ${i+1}`:p.displayName,p.role,anonymize?[]:p.aliases,p.createdAt,p.updatedAt,p.previousVersionId,p.handedness,anonymize?undefined:p.ustaId,anonymize?undefined:p.ustaUrl,anonymize?undefined:p.notes])),
+    "identity_mappings.csv": csv(["mapping_id","from_player_id","to_player_id","kind","created_at"], mappings.map((m) => [m.id,m.fromPlayerId,m.toPlayerId,m.kind,m.createdAt])),
+    "points.csv": csv(["match_id","point_id","sequence","timestamp","server","receiver","winner","serve_result","score_before","score_after","outcome","rally_range"], points.map(({match,point,details}) => [match.id,point.pointGroupId,point.sequence,point.timestamp,point.payload.server,point.payload.receiver,point.payload.winner,point.payload.serveResult,point.payload.scoreBefore,point.payload.scoreAfter,details?.outcome,details?.rallyRange])),
+    "serves.csv": csv(["match_id","event_id","point_id","sequence","server","attempt","result","voided"], selected.flatMap((m) => { const voided=voidedPointIds(m.events); return m.events.filter((e) => e.type === "serve_attempted").map((e) => [m.id,e.id,e.pointGroupId,e.sequence,e.payload.server,e.payload.attempt,e.payload.result,voided.has(e.pointGroupId)]); })),
+    "shots.csv": csv(["match_id","point_id","outcome","responsible_player","final_stroke","shot_type","advanced_shot_type"], points.map(({match,point,details}) => [match.id,point.pointGroupId,details?.outcome,details?.responsiblePlayer,details?.finalStroke,details?.shotType,details?.advancedShotType])),
+    "mental_states.csv": csv(["match_id","event_id","sequence","player","state","capture_moment","point_id","note"], selected.flatMap((m) => m.events.filter((e) => e.type === "mental_state_changed").map((e) => [m.id,e.id,e.sequence,e.payload.player,e.payload.state,e.payload.captureMoment,e.payload.linkedPointGroupId,anonymize?undefined:e.payload.note]))),
+    "score_syncs.csv": csv(["match_id","event_id","sequence","previous_score","corrected_score","reason","valid"], selected.flatMap((m) => m.events.filter((e) => e.type === "score_synced").map((e) => [m.id,e.id,e.sequence,e.payload.previous,e.payload.corrected,e.payload.reason,e.payload.valid]))),
+    "events.json": JSON.stringify(selected.map((m) => ({ matchId:m.id,events:anonymize?anonymizedEvents(m):m.events })),null,2),
+    "schema.json": JSON.stringify({schemaVersion:1,datasetVersion:DATASET_VERSION,apiContract:{version:"v1",access:"authenticated, read-only, user-scoped, revocable",resources:["matches","players","events","points","serves","shots","mental-states","score-corrections","strategy-reviews"],filters:["match","tournament","eventSequence","updatedAt"]}},null,2),
   };
-  return { schemaVersion: 1, matchId: match.id, generatedAt: new Date().toISOString(), files };
+  if (report) files["match-report.html"] = buildCoachReport(report.match, report.options);
+  files["manifest.json"] = JSON.stringify({schemaVersion:1,datasetVersion:DATASET_VERSION,generatedAt:new Date().toISOString(),anonymized:anonymize,matchCount:selected.length,playerCount:players.length,eventCount:selected.reduce((n,m)=>n+m.events.length,0),files:[...Object.keys(files),"manifest.json"],coverage:selected.map((m)=>({matchId:m.id,trackedPoints:activePointEvents(m.events).length,scoreSyncs:m.events.filter((e)=>e.type==="score_synced").length}))},null,2);
+  return { schemaVersion:1,datasetVersion:DATASET_VERSION,files };
 }
 
-export function downloadExport(match: MatchRecord) {
-  const bundle = buildExportBundle(match);
-  const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: "application/json" });
-  const link = document.createElement("a");
-  link.href = URL.createObjectURL(blob);
-  link.download = `baseline-${match.config.myPlayerName.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${match.createdAt.slice(0, 10)}.json`;
-  link.click();
-  URL.revokeObjectURL(link.href);
-}
-
-export function eventLabel(event: MatchEvent): string {
-  return event.type.replaceAll("_", " ");
-}
+const crcTable=Array.from({length:256},(_,n)=>{let c=n;for(let k=0;k<8;k++)c=c&1?0xedb88320^(c>>>1):c>>>1;return c>>>0});
+const crc32=(bytes:Uint8Array)=>{let c=0xffffffff;for(const byte of bytes)c=crcTable[(c^byte)&255]^(c>>>8);return(c^0xffffffff)>>>0};
+const join=(chunks:Uint8Array[])=>{const result=new Uint8Array(chunks.reduce((n,b)=>n+b.length,0));let offset=0;for(const chunk of chunks){result.set(chunk,offset);offset+=chunk.length}return result};
+export function zipFiles(files:Record<string,string>){const encoder=new TextEncoder(),local:Uint8Array[]=[],central:Uint8Array[]=[];let offset=0;for(const[name,value]of Object.entries(files)){const filename=encoder.encode(name),data=encoder.encode(value),crc=crc32(data),header=new Uint8Array(30+filename.length),view=new DataView(header.buffer);view.setUint32(0,0x04034b50,true);view.setUint16(4,20,true);view.setUint32(14,crc,true);view.setUint32(18,data.length,true);view.setUint32(22,data.length,true);view.setUint16(26,filename.length,true);header.set(filename,30);const directory=new Uint8Array(46+filename.length),dv=new DataView(directory.buffer);dv.setUint32(0,0x02014b50,true);dv.setUint16(4,20,true);dv.setUint16(6,20,true);dv.setUint32(16,crc,true);dv.setUint32(20,data.length,true);dv.setUint32(24,data.length,true);dv.setUint16(28,filename.length,true);dv.setUint32(42,offset,true);directory.set(filename,46);local.push(header,data);central.push(directory);offset+=header.length+data.length}const c=join(central),end=new Uint8Array(22),v=new DataView(end.buffer);v.setUint32(0,0x06054b50,true);v.setUint16(8,central.length,true);v.setUint16(10,central.length,true);v.setUint32(12,c.length,true);v.setUint32(16,offset,true);return new Blob([...local,c,end],{type:"application/zip"})}
+export function downloadExport(match:MatchRecord,players:PlayerProfile[]=[],mappings:IdentityMapping[]=[],options=DEFAULT_REPORT_OPTIONS,anonymize=false){const bundle=buildExportBundle(match,players,mappings,anonymize,{match,options});const url=URL.createObjectURL(zipFiles(bundle.files));const link=document.createElement("a");link.href=url;link.download=`baseline-${match.config.myPlayerName.toLowerCase().replace(/[^a-z0-9]+/g,"-")}-${match.createdAt.slice(0,10)}.zip`;link.click();setTimeout(()=>URL.revokeObjectURL(url),1000)}
+export function eventLabel(event:MatchEvent){return event.type.replaceAll("_"," ")}

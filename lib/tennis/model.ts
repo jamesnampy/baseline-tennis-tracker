@@ -1,4 +1,27 @@
 export type PlayerKey = "my" | "opponent";
+export type PlayerRole = "my_player" | "opponent" | "guest";
+
+export interface PlayerProfile {
+  id: string;
+  displayName: string;
+  role: PlayerRole;
+  aliases: string[];
+  createdAt: string;
+  updatedAt: string;
+  previousVersionId?: string;
+  handedness?: "left" | "right";
+  ustaId?: string;
+  ustaUrl?: string;
+  notes?: string;
+}
+
+export interface IdentityMapping {
+  id: string;
+  fromPlayerId: string;
+  toPlayerId: string;
+  kind: "guest_link" | "merge" | "profile_version";
+  createdAt: string;
+}
 
 export type MatchFormatId =
   | "best_of_3_tiebreak"
@@ -40,6 +63,8 @@ export type AdvancedShotType =
   | "inside_in";
 
 export interface MatchConfig {
+  myPlayerId?: string;
+  opponentId?: string;
   myPlayerName: string;
   opponentName: string;
   format: MatchFormatId;
@@ -195,6 +220,7 @@ export interface MatchRecord {
   createdAt: string;
   updatedAt: string;
   config: MatchConfig;
+  authorized?: boolean;
   events: MatchEvent[];
 }
 
@@ -264,6 +290,20 @@ export const FORMAT_RULES: Record<MatchFormatId, FormatRule> = {
 export const PLAYER_INDEX: Record<PlayerKey, 0 | 1> = { my: 0, opponent: 1 };
 export const otherPlayer = (player: PlayerKey): PlayerKey =>
   player === "my" ? "opponent" : "my";
+
+/** Outcomes that are valid for the recorded serve and point-winner context. */
+export function eligiblePointOutcomes(point: PointCompletedEvent): PointOutcome[] {
+  if (point.payload.serveResult === "ace") return ["ace"];
+  if (point.payload.serveResult === "double_fault") return ["double_fault"];
+  const returnOutcome: PointOutcome = point.payload.winner === point.payload.receiver
+    ? "return_winner"
+    : "return_error";
+  return [returnOutcome, "winner", "forced_error", "unforced_error"];
+}
+
+export function isPointOutcomeValid(point: PointCompletedEvent, outcome: PointOutcome): boolean {
+  return eligiblePointOutcomes(point).includes(outcome);
+}
 
 export const deepCloneScore = (score: ScoreState): ScoreState =>
   JSON.parse(JSON.stringify(score)) as ScoreState;

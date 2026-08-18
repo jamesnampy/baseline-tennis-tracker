@@ -1,18 +1,22 @@
 "use client";
+/* eslint-disable jsx-a11y/label-has-associated-control */
 
 import { useEffect, useMemo, useState } from "react";
 import { buildStats, percentage, strategyReview } from "@/lib/tennis/analytics";
-import { downloadExport } from "@/lib/tennis/export";
+import { buildExportBundle, downloadExport, zipFiles } from "@/lib/tennis/export";
 import {
-  AdvancedShotType, deepCloneScore, FinalStroke, FORMAT_RULES, MatchConfig,
-  MatchEvent, MatchRecord, MentalState, otherPlayer, PlayerKey, PointDetails,
+  AdvancedShotType, deepCloneScore, eligiblePointOutcomes, FinalStroke, FORMAT_RULES, MatchConfig,
+  IdentityMapping, MatchEvent, MatchRecord, MentalState, otherPlayer, PlayerKey, PlayerProfile, PointDetails,
   PointOutcome, RallyRange, ScoreState, ShotType,
 } from "@/lib/tennis/model";
+import { createPlayerProfile, linkPlayerIdentity, playerProfileAnalytics, versionPlayerProfile } from "@/lib/tennis/profiles";
+import { buildPressureAnalytics } from "@/lib/tennis/pressure";
+import { buildCoachReport, DEFAULT_REPORT_OPTIONS, type CoachReportOptions } from "@/lib/tennis/report";
 import {
   activePointEvents, applyPoint, initialScore, pointDetailsMap, pointScoreLabel,
   projectScore, scoreSummary, voidedPointIds,
 } from "@/lib/tennis/scoring";
-import { loadMatches, saveMatch } from "@/lib/tennis/storage";
+import { deleteMatch, loadIdentityMappings, loadMatches, loadPlayers, saveIdentityMapping, saveMatch, savePlayer } from "@/lib/tennis/storage";
 
 type Tab = "track" | "stats" | "timeline" | "match";
 type TrackStage = "serve" | "winner" | "outcome" | "details";
@@ -51,20 +55,23 @@ function eventBase(match: MatchRecord, offset = 1) {
 
 export default function Home() {
   const [matches, setMatches] = useState<MatchRecord[]>([]);
+  const [players, setPlayers] = useState<PlayerProfile[]>([]);
+  const [mappings, setMappings] = useState<IdentityMapping[]>([]);
   const [match, setMatch] = useState<MatchRecord | null>(null);
   const [screen, setScreen] = useState<"home" | "setup" | "match">("home");
   const [config, setConfig] = useState<MatchConfig>(defaultConfig);
   const [loaded, setLoaded] = useState(false);
   const [saved, setSaved] = useState(true);
+  const [homeView, setHomeView] = useState<"matches" | "profiles" | "export" | "reports">("matches");
 
   useEffect(() => {
-    loadMatches().then((records) => { setMatches(records); setLoaded(true); }).catch(() => setLoaded(true));
+    Promise.all([loadMatches(), loadPlayers(), loadIdentityMappings()]).then(([records, savedPlayers, savedMappings]) => { setMatches(records); setPlayers(savedPlayers); setMappings(savedMappings); setLoaded(true); }).catch(() => setLoaded(true));
     if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => undefined);
   }, []);
   useEffect(() => {
     if (!match) return;
-    setSaved(false);
     const timer = window.setTimeout(() => {
+      setSaved(false);
       saveMatch(match).then(() => { setSaved(true); setMatches((existing) => [match, ...existing.filter((item) => item.id !== match.id)]); });
     }, 80);
     return () => window.clearTimeout(timer);
@@ -73,7 +80,12 @@ export default function Home() {
   function startMatch() {
     if (!config.myPlayerName.trim() || !config.opponentName.trim()) return;
     const now = new Date().toISOString(); const matchId = makeId(); const score = initialScore(config.firstServer);
-    const cleanConfig = { ...config, myPlayerName: config.myPlayerName.trim(), opponentName: config.opponentName.trim() };
+    let myProfile = players.find((p) => p.id === config.myPlayerId); let opponentProfile = players.find((p) => p.id === config.opponentId);
+    if (!myProfile) myProfile = createPlayerProfile(config.myPlayerName, "my_player");
+    if (!opponentProfile) opponentProfile = createPlayerProfile(config.opponentName, "opponent");
+    if (myProfile.id === opponentProfile.id) return;
+    for (const profile of [myProfile, opponentProfile]) { savePlayer(profile); if (!players.some((p) => p.id === profile.id)) setPlayers((rows) => [...rows, profile]); }
+    const cleanConfig = { ...config, myPlayerId: myProfile.id, opponentId: opponentProfile.id, myPlayerName: myProfile.displayName, opponentName: opponentProfile.displayName };
     const next: MatchRecord = { id: matchId, schemaVersion: 1, createdAt: now, updatedAt: now, config: cleanConfig, events: [
       { id: makeId(), matchId, schemaVersion: 1, sequence: 1, timestamp: now, source: "tracked", type: "match_created", payload: { config: cleanConfig } },
       { id: makeId(), matchId, schemaVersion: 1, sequence: 2, timestamp: now, source: "tracked", type: "match_started", payload: { score } },
@@ -82,21 +94,23 @@ export default function Home() {
   }
 
   if (!loaded) return <main className="loading"><span className="brand-mark">B</span><p>Opening Baseline…</p></main>;
-  if (screen === "setup") return <Setup config={config} setConfig={setConfig} onCancel={() => setScreen("home")} onStart={startMatch} />;
-  if (screen === "match" && match) return <MatchTracker match={match} setMatch={setMatch} saved={saved} onExit={() => setScreen("home")} />;
+  function saveNewVersion(profile: PlayerProfile, displayName: string, key: "my" | "opponent") { const { player, mapping } = versionPlayerProfile(profile, displayName); setPlayers((rows) => [...rows, player]); setMappings((rows) => [...rows, mapping]); savePlayer(player); saveIdentityMapping(mapping); setConfig((current) => ({ ...current, [`${key}PlayerId`]: player.id, [`${key}PlayerName`]: player.displayName })); }
+  if (screen === "setup") return <Setup config={config} setConfig={setConfig} players={players} onVersion={saveNewVersion} onCancel={() => setScreen("home")} onStart={startMatch} />;
+  if (screen === "match" && match) return <MatchTracker match={match} setMatch={setMatch} players={players} mappings={mappings} saved={saved} onExit={() => setScreen("home")} />;
+  if (homeView !== "matches") return <DataHub view={homeView} setView={setHomeView} players={players} matches={matches} mappings={mappings} onMap={(mapping) => { setMappings((rows) => [...rows, mapping]); saveIdentityMapping(mapping); }} />;
   return <main className="app-shell home-screen">
     <header className="brand-header"><span className="brand-mark">B</span><div><strong>Baseline</strong><small>Tennis match tracker</small></div></header>
     <section className="hero-card"><p className="eyebrow">COURTSIDE · OFFLINE READY</p><h1>Track the match.<br />See the patterns.</h1><p>Fast, one-handed scoring with both-player stats, a complete timeline, and portable match data.</p><button className="primary-button" onClick={() => { setConfig({ ...defaultConfig, date: new Date().toISOString().slice(0, 10) }); setScreen("setup"); }}>Start a new match <span>→</span></button></section>
     <section className="saved-matches"><div className="section-heading"><div><p className="eyebrow">ON THIS DEVICE</p><h2>Recent matches</h2></div><span className="local-badge">● Saved locally</span></div>
-      {!matches.length ? <div className="empty-card"><strong>No matches yet</strong><p>Your unfinished and completed matches will appear here.</p></div> : matches.map((item) => { const score = projectScore(item.events, item.config); return <button className="match-list-card" key={item.id} onClick={() => { setMatch(item); setScreen("match"); }}><span><strong>{item.config.myPlayerName}</strong><small>vs. {item.config.opponentName}</small></span><span className="match-list-score"><strong>{scoreSummary(score, item.config)}</strong><small>{score.matchComplete ? "Complete" : "Resume match"} · {new Date(item.updatedAt).toLocaleDateString()}</small></span><b>›</b></button>; })}
-    </section>
+      {!matches.length ? <div className="empty-card"><strong>No matches yet</strong><p>Your unfinished and completed matches will appear here.</p></div> : matches.map((item) => { const score = projectScore(item.events, item.config); return <div className="match-list-wrap" key={item.id}><button className="match-list-card" onClick={() => { setMatch(item); setScreen("match"); }}><span><strong>{item.config.myPlayerName}</strong><small>vs. {item.config.opponentName}</small></span><span className="match-list-score"><strong>{scoreSummary(score, item.config)}</strong><small>{score.matchComplete ? "Complete" : "Resume match"} · {new Date(item.updatedAt).toLocaleDateString()}</small></span><b>›</b></button>{!score.matchComplete && <button className="delete-match" aria-label={`Delete unfinished match against ${item.config.opponentName}`} onClick={() => { if (window.confirm(`Delete the unfinished match against ${item.config.opponentName}? This cannot be undone.`)) { deleteMatch(item.id).then(() => setMatches((rows) => rows.filter((row) => row.id !== item.id))); } }}>Delete</button>}</div>; })}
+    </section><HomeNav view={homeView} setView={setHomeView} />
   </main>;
 }
 
-function Setup({ config, setConfig, onCancel, onStart }: { config: MatchConfig; setConfig: (value: MatchConfig) => void; onCancel: () => void; onStart: () => void }) {
+function Setup({ config, setConfig, players, onVersion, onCancel, onStart }: { config: MatchConfig; setConfig: (value: MatchConfig) => void; players: PlayerProfile[]; onVersion: (profile: PlayerProfile, displayName: string, key: "my" | "opponent") => void; onCancel: () => void; onStart: () => void }) {
   const set = <K extends keyof MatchConfig,>(key: K, value: MatchConfig[K]) => setConfig({ ...config, [key]: value });
   return <main className="app-shell setup-screen"><header className="simple-header"><button onClick={onCancel}>‹</button><div><p className="eyebrow">NEW MATCH</p><strong>Match setup</strong></div><span /></header><div className="form-scroll">
-    <section className="form-section"><h2>Players</h2><label>My player<input value={config.myPlayerName} onChange={(event) => set("myPlayerName", event.target.value)} placeholder="Player name" /></label><label>Opponent<input value={config.opponentName} onChange={(event) => set("opponentName", event.target.value)} placeholder="Opponent name" autoFocus /></label></section>
+    <section className="form-section"><h2>Players</h2><ProfilePicker label="My player" profiles={players.filter((p) => p.role === "my_player")} selectedId={config.myPlayerId} name={config.myPlayerName} onSelect={(profile) => setConfig({ ...config, myPlayerId: profile?.id, myPlayerName: profile?.displayName ?? "" })} onName={(name) => set("myPlayerName", name)} onVersion={(profile, name) => onVersion(profile, name, "my")} /><ProfilePicker label="Opponent" profiles={players.filter((p) => p.role !== "my_player")} selectedId={config.opponentId} name={config.opponentName} onSelect={(profile) => setConfig({ ...config, opponentId: profile?.id, opponentName: profile?.displayName ?? "" })} onName={(name) => set("opponentName", name)} onVersion={(profile, name) => onVersion(profile, name, "opponent")} /></section>
     <section className="form-section"><h2>Match format</h2><div className="format-list">{Object.values(FORMAT_RULES).map((format) => <button className={config.format === format.id ? "selected" : ""} key={format.id} onClick={() => set("format", format.id)}><span><strong>{format.label}</strong><small>{format.description}</small></span><i>{config.format === format.id ? "✓" : ""}</i></button>)}</div><label className="switch-row"><span><strong>Ad scoring</strong><small>Turn on advantage scoring after deuce</small></span><input type="checkbox" checked={config.adScoring} onChange={(event) => set("adScoring", event.target.checked)} /></label></section>
     <section className="form-section"><h2>First server</h2><div className="segmented"><button className={config.firstServer === "my" ? "selected" : ""} onClick={() => set("firstServer", "my")}>{config.myPlayerName || "My player"}</button><button className={config.firstServer === "opponent" ? "selected" : ""} onClick={() => set("firstServer", "opponent")}>{config.opponentName || "Opponent"}</button></div></section>
     <section className="form-section"><h2>Starting state <em>Optional</em></h2><MentalSelect label="My Player Starting State" value={config.startingMentalState.my} onChange={(value) => set("startingMentalState", { ...config.startingMentalState, my: value })} /><MentalSelect label="Opponent Starting State" value={config.startingMentalState.opponent} onChange={(value) => set("startingMentalState", { ...config.startingMentalState, opponent: value })} /></section>
@@ -104,9 +118,27 @@ function Setup({ config, setConfig, onCancel, onStart }: { config: MatchConfig; 
   </div><div className="sticky-action"><button className="primary-button" disabled={!config.myPlayerName.trim() || !config.opponentName.trim()} onClick={onStart}>Start tracking <span>→</span></button></div></main>;
 }
 
+function ProfilePicker({ label, profiles, selectedId, name, onSelect, onName, onVersion }: { label: string; profiles: PlayerProfile[]; selectedId?: string; name: string; onSelect: (profile?: PlayerProfile) => void; onName: (name: string) => void; onVersion: (profile: PlayerProfile, name: string) => void }) {
+  const selected = profiles.find((profile) => profile.id === selectedId); const edited = !!selected && selected.displayName.trim() !== name.trim();
+  return <div className="profile-field"><label>{label}<select value={selectedId ?? "new"} onChange={(event) => onSelect(profiles.find((profile) => profile.id === event.target.value))}><option value="new">+ Create new player</option>{profiles.map((profile) => <option value={profile.id} key={profile.id}>{profile.displayName}</option>)}</select></label><label>{selected ? "Name for a new profile version" : "Player name"}<input value={name} onChange={(event) => onName(event.target.value)} placeholder="Player name" /></label>{edited && <button className="version-button" onClick={() => onVersion(selected, name)}>Save edit as new profile</button>}{selected && <p className="profile-note">Existing matches keep “{selected.displayName}.” Saving this edit creates a new stable profile for future matches.</p>}</div>;
+}
+
+function HomeNav({ view, setView }: { view: "matches" | "profiles" | "export" | "reports"; setView: (view: "matches" | "profiles" | "export" | "reports") => void }) { return <nav className="home-nav">{([['matches','Matches'],['profiles','Profiles'],['export','Export'],['reports','Reports']] as const).map(([id,label]) => <button className={view===id?"active":""} key={id} onClick={() => setView(id)}>{label}</button>)}</nav>; }
+
+function DataHub({ view, setView, players, matches, mappings, onMap }: { view: "profiles" | "export" | "reports"; setView: (view: "matches" | "profiles" | "export" | "reports") => void; players: PlayerProfile[]; matches: MatchRecord[]; mappings: IdentityMapping[]; onMap: (mapping: IdentityMapping) => void }) {
+  const [playerId,setPlayerId]=useState(players[0]?.id??""); const [matchId,setMatchId]=useState(matches[0]?.id??""); const [fromId,setFromId]=useState(""); const [anonymize,setAnonymize]=useState(false); const [options,setOptions]=useState<CoachReportOptions>(DEFAULT_REPORT_OPTIONS);
+  const selectedMatch=matches.find((match)=>match.id===matchId)??matches[0]; const selectedPlayer=players.find((player)=>player.id===playerId)??players[0]; const profileStats=selectedPlayer?playerProfileAnalytics(selectedPlayer.id,matches):undefined; const pressure=selectedMatch?buildPressureAnalytics(selectedMatch):undefined;
+  const saveBlob=(name:string,blob:Blob)=>{const url=URL.createObjectURL(blob);const link=document.createElement("a");link.href=url;link.download=name;link.click();setTimeout(()=>URL.revokeObjectURL(url),1000)};
+  return <main className="app-shell data-screen"><header className="simple-header"><button onClick={()=>setView("matches")}>‹</button><div><p className="eyebrow">BASELINE DATA</p><strong>{view === "profiles" ? "Player profiles" : view === "export" ? "Analysis export" : "Coach reports"}</strong></div><span /></header><div className="data-scroll">
+    {view==="profiles"&&<><section className="data-intro"><h1>Player profiles</h1><p>Stable identities connect authorized matches without rewriting history.</p></section>{players.length?<><label className="data-select">Player<select value={selectedPlayer?.id} onChange={(e)=>setPlayerId(e.target.value)}>{players.map((p)=><option value={p.id} key={p.id}>{p.displayName}</option>)}</select></label>{profileStats&&<div className="profile-metrics"><span><b>{profileStats.matchCount}</b><small>matches</small></span><span><b>{profileStats.trackedPoints}</b><small>tracked points</small></span><span><b>{profileStats.coverage}%</b><small>coverage</small></span><span><b>{profileStats.pointsWon}</b><small>points won</small></span></div>}<section className="data-card"><h2>Auditable identity link</h2><select value={fromId} onChange={(e)=>setFromId(e.target.value)}><option value="">Choose guest or duplicate</option>{players.filter((p)=>p.id!==selectedPlayer?.id).map((p)=><option value={p.id} key={p.id}>{p.displayName}</option>)}</select><button disabled={!fromId||!selectedPlayer} onClick={()=>{if(selectedPlayer){onMap(linkPlayerIdentity(fromId,selectedPlayer.id));setFromId("")}}}>Link to {selectedPlayer?.displayName}</button><p>Creates a mapping record; original match and event IDs remain unchanged.</p></section><section className="data-card"><h2>Pressure samples across selected match</h2>{pressure&&(["my","opponent"] as PlayerKey[]).map((key)=><p key={key}><strong>{playerName(selectedMatch.config,key)}</strong> · {pressure[key].won}/{pressure[key].played} won · coverage {pressure[key].trackedPoints}/{pressure[key].estimatedPoints} ({pressure[key].coverage}%)</p>)}</section></>:<div className="empty-card">Create profiles from New Match setup.</div>}</>}
+    {view==="export"&&<><section className="data-intro"><h1>Codex / Claude export</h1><p>One ZIP containing portable CSV tables, lossless events, schema, manifest, API contract, and a coach report.</p></section><label className="data-select">Scope<select value={matchId} onChange={(e)=>setMatchId(e.target.value)}><option value="">All authorized matches</option>{matches.map((m)=><option value={m.id} key={m.id}>{m.config.myPlayerName} vs. {m.config.opponentName}</option>)}</select></label><label className="check-row"><input type="checkbox" checked={anonymize} onChange={(e)=>setAnonymize(e.target.checked)}/>Anonymize names and private profile fields</label><div className="file-grid">{["matches.csv","players.csv","identity_mappings.csv","points.csv","serves.csv","shots.csv","mental_states.csv","score_syncs.csv","events.json","schema.json","manifest.json","match-report.html"].map((name)=><span key={name}>✓ {name}</span>)}</div><button className="primary-button" disabled={!matches.length} onClick={()=>{const scope=matchId&&selectedMatch?[selectedMatch]:matches.filter((m)=>m.authorized!==false);const bundle=buildExportBundle(scope,players,mappings,anonymize,selectedMatch?{match:selectedMatch,options}:undefined);saveBlob("baseline-analysis.zip",zipFiles(bundle.files))}}>Download complete ZIP</button></>}
+    {view==="reports"&&<><section className="data-intro"><h1>Coach report</h1><p>Create a private, self-contained HTML snapshot. Free-form notes stay excluded unless selected.</p></section><label className="data-select">Match<select value={matchId} onChange={(e)=>setMatchId(e.target.value)}>{matches.map((m)=><option value={m.id} key={m.id}>{m.config.myPlayerName} vs. {m.config.opponentName}</option>)}</select></label><section className="data-card report-options">{Object.entries({opponentIdentity:"Opponent identity",tournamentLink:"Tournament link",timeline:"Point timeline",mentalStates:"Mental-state progression",mentalNotes:"Mental-state notes",recommendations:"Coaching recommendations"}).map(([key,label])=><label key={key}><input type="checkbox" checked={options[key as keyof CoachReportOptions]} onChange={(e)=>setOptions((current)=>({...current,[key]:e.target.checked}))}/>{label}</label>)}</section><button className="primary-button" disabled={!selectedMatch} onClick={()=>selectedMatch&&saveBlob("baseline-coach-report.html",new Blob([buildCoachReport(selectedMatch,options)],{type:"text/html"}))}>Download self-contained HTML</button></>}
+  </div><HomeNav view={view} setView={setView}/></main>;
+}
+
 function MentalSelect({ label, value, onChange }: { label: string; value: MentalState; onChange: (value: MentalState) => void }) { return <label>{label}<select value={value} onChange={(event) => onChange(event.target.value as MentalState)}>{Object.entries(mentalLabels).map(([key, text]) => <option key={key} value={key}>{text}</option>)}</select></label>; }
 
-function MatchTracker({ match, setMatch, saved, onExit }: { match: MatchRecord; setMatch: (match: MatchRecord) => void; saved: boolean; onExit: () => void }) {
+function MatchTracker({ match, setMatch, players, mappings, saved, onExit }: { match: MatchRecord; setMatch: (match: MatchRecord) => void; players: PlayerProfile[]; mappings: IdentityMapping[]; saved: boolean; onExit: () => void }) {
   const [tab, setTab] = useState<Tab>("track"); const [stage, setStage] = useState<TrackStage>("serve");
   const [serveAttempt, setServeAttempt] = useState<1 | 2>(1); const [pendingPointId, setPendingPointId] = useState<string>();
   const [details, setDetails] = useState<PointDetails>({}); const [scoreModal, setScoreModal] = useState(false);
@@ -115,6 +147,7 @@ function MatchTracker({ match, setMatch, saved, onExit }: { match: MatchRecord; 
   const score = useMemo(() => projectScore(match.events, match.config), [match]);
   const stats = useMemo(() => buildStats(match.events, match.config), [match]);
   const points = useMemo(() => activePointEvents(match.events), [match]);
+  const pendingPoint = useMemo(() => points.find((item) => item.pointGroupId === pendingPointId), [pendingPointId, points]);
   const detailMap = useMemo(() => pointDetailsMap(match.events), [match]);
   const mental = useMemo(() => currentMentalState(match), [match]);
   useEffect(() => { const update = () => setOnline(navigator.onLine); window.addEventListener("online", update); window.addEventListener("offline", update); return () => { window.removeEventListener("online", update); window.removeEventListener("offline", update); }; }, []);
@@ -137,6 +170,7 @@ function MatchTracker({ match, setMatch, saved, onExit }: { match: MatchRecord; 
   function chooseWinner(winner: PlayerKey) { completePoint(winner, "in", serveAttempt === 1 ? 0 : 1, pendingPointId ?? makeId(), []); }
   function chooseOutcome(outcome: PointOutcome) {
     const point = points.find((item) => item.pointGroupId === pendingPointId); if (!point) return;
+    if (!eligiblePointOutcomes(point).includes(outcome)) return;
     const winnerOutcome = outcome === "winner" || outcome === "return_winner"; const owner = winnerOutcome ? point.payload.winner : point.payload.loser;
     setDetails({ outcome, rallyRange: outcome.startsWith("return_") ? "1-5" : undefined, responsiblePlayer: owner, benefitingPlayer: point.payload.winner, finalStrokePlayer: owner }); setStage("details");
   }
@@ -164,9 +198,9 @@ function MatchTracker({ match, setMatch, saved, onExit }: { match: MatchRecord; 
   }
   if (score.matchComplete && tab === "track") return <CompletedView match={match} score={score} stats={stats} saved={saved} onTab={setTab} onExit={onExit} />;
   return <main className="app-shell tracker-shell"><header className="match-bar"><button className="icon-button" aria-label="Exit match" onClick={onExit}>×</button><div><span>SET {score.sets.length + 1} · {score.inTiebreak ? (score.tiebreakTarget === 10 ? "MATCH TIEBREAK" : "TIEBREAK") : "LIVE"}</span><strong>{match.config.myPlayerName} vs. {match.config.opponentName}</strong><small className={saved ? "save-state saved" : "save-state"}>● {saved ? "Saved on device" : "Saving…"}</small></div><button className="undo icon-button" disabled={!points.length || undoCount >= 5} onClick={undoPoint}>↶<small>Undo</small></button></header>
-    <Scoreboard match={match} score={score} onSync={() => setScoreModal(true)} /><section className="tracker-content">{stage === "serve" && <ServeStage score={score} config={match.config} serveAttempt={serveAttempt} onServe={onServe} />}{stage === "winner" && <WinnerStage config={match.config} onWinner={chooseWinner} />}{stage === "outcome" && <OutcomeStage onOutcome={chooseOutcome} onSkip={resetPointEntry} />}{stage === "details" && <DetailsTray details={details} setDetails={setDetails} onContinue={finishDetails} />}</section>
+    <Scoreboard match={match} score={score} onSync={() => setScoreModal(true)} /><section className="tracker-content">{stage === "serve" && <ServeStage score={score} config={match.config} serveAttempt={serveAttempt} onServe={onServe} />}{stage === "winner" && <WinnerStage config={match.config} onWinner={chooseWinner} />}{stage === "outcome" && <OutcomeStage allowedOutcomes={pendingPoint ? eligiblePointOutcomes(pendingPoint) : []} onOutcome={chooseOutcome} onSkip={resetPointEntry} />}{stage === "details" && <DetailsTray details={details} setDetails={setDetails} onContinue={finishDetails} />}</section>
     <button className="mental-pill" onClick={() => setMentalModal("my")}><span className={`mental-dot ${mental.my}`} /> {match.config.myPlayerName} is {mentalLabels[mental.my].toLowerCase()} <b>Change</b></button><div className="connection-strip"><span>● {online ? "Online" : "Offline tracking"}</span><span>{stats.coverage}% tracked</span></div><BottomNav tab={tab} onTab={setTab} />
-    {tab !== "track" && <div className="overlay-page"><button className="overlay-close" onClick={() => setTab("track")}>×</button>{tab === "stats" && <StatsView match={match} stats={stats} />}{tab === "timeline" && <TimelineView match={match} points={points} details={detailMap} />}{tab === "match" && <MatchView match={match} stats={stats} score={score} onExport={() => downloadExport(match)} onGenerate={generateStrategy} />}</div>}
+    {tab !== "track" && <div className="overlay-page"><button className="overlay-close" onClick={() => setTab("track")}>×</button>{tab === "stats" && <StatsView match={match} stats={stats} />}{tab === "timeline" && <TimelineView match={match} points={points} details={detailMap} />}{tab === "match" && <MatchView match={match} stats={stats} score={score} onExport={() => downloadExport(match, players, mappings)} onGenerate={generateStrategy} />}</div>}
     {scoreModal && <ScoreSyncModal match={match} score={score} onClose={() => setScoreModal(false)} onSave={(corrected, reason) => { append([{ ...eventBase(match), source: "corrected", type: "score_synced", payload: { previous: score, corrected, reason, valid: true } }]); setScoreModal(false); resetPointEntry(); }} />}
     {mentalModal && <MentalModal key={mentalModal} player={mentalModal} current={mental[mentalModal]} config={match.config} onClose={() => setMentalModal(undefined)} onSave={(state, note) => { append([{ ...eventBase(match), source: "tracked", type: "mental_state_changed", payload: { player: mentalModal, state, previousState: mental[mentalModal], captureMoment: pendingPointId ? "after_point" : "manual", linkedPointGroupId: pendingPointId, score, note } }]); setMentalModal(undefined); }} onSwitch={setMentalModal} />}
   </main>;
@@ -179,7 +213,7 @@ function Scoreboard({ match, score, onSync }: { match: MatchRecord; score: Score
 }
 function ServeStage({ score, config, serveAttempt, onServe }: { score: ScoreState; config: MatchConfig; serveAttempt: 1 | 2; onServe: (result: "in" | "fault" | "ace") => void }) { return <><div className="point-prompt"><p className="eyebrow">POINT · {playerName(config, score.server).toUpperCase()} SERVING</p><div className="serve-title"><h1>{serveAttempt === 1 ? "First serve" : "Second serve"}</h1><div className="serve-balls" aria-label={`${3 - serveAttempt} serves available`}><i className="ball" />{serveAttempt === 1 ? <i className="ball" /> : <i className="ball spent" />}</div></div></div><div className="serve-grid"><button className="big-action serve-in" onClick={() => onServe("in")}><small>{serveAttempt === 1 ? "1ST" : "2ND"} SERVE</small><strong>In</strong><span>Continue point</span></button><button className="big-action fault" onClick={() => onServe("fault")}><small>{serveAttempt === 1 ? "1ST" : "2ND"} SERVE</small><strong>Fault</strong><span>{serveAttempt === 1 ? "One ball left" : "Double fault"}</span></button><button className="wide-action ace" onClick={() => onServe("ace")}><small>POINT WON</small><strong>Ace</strong><span>Finish point</span></button></div></>; }
 function WinnerStage({ config, onWinner }: { config: MatchConfig; onWinner: (player: PlayerKey) => void }) { return <><div className="point-prompt"><p className="eyebrow">SERVE IS IN</p><h1>Who won the point?</h1></div><div className="winner-grid"><button onClick={() => onWinner("my")}><small>POINT TO</small><strong>{config.myPlayerName}</strong></button><button onClick={() => onWinner("opponent")}><small>POINT TO</small><strong>{config.opponentName}</strong></button></div></>; }
-function OutcomeStage({ onOutcome, onSkip }: { onOutcome: (outcome: PointOutcome) => void; onSkip: () => void }) { const outcomes: PointOutcome[][] = [["return_winner", "return_error"], ["winner", "forced_error", "unforced_error"]]; return <><div className="point-prompt compact"><p className="eyebrow">POINT SAVED</p><h1>How did the point end?</h1><p>Optional—choose one, or keep moving.</p></div><div className="outcome-grid">{outcomes.flatMap((row, rowIndex) => row.map((outcome) => <button className={`outcome row-${rowIndex}`} key={outcome} onClick={() => onOutcome(outcome)}>{outcomeLabels[outcome]}</button>))}</div><button className="skip-button" onClick={onSkip}>Skip details <span>→</span></button></>; }
+function OutcomeStage({ allowedOutcomes, onOutcome, onSkip }: { allowedOutcomes: PointOutcome[]; onOutcome: (outcome: PointOutcome) => void; onSkip: () => void }) { const outcomes: PointOutcome[][] = [["return_winner", "return_error"].filter((outcome) => allowedOutcomes.includes(outcome as PointOutcome)) as PointOutcome[], ["winner", "forced_error", "unforced_error"]]; return <><div className="point-prompt compact"><p className="eyebrow">POINT SAVED</p><h1>How did the point end?</h1><p>Optional—choose one, or keep moving.</p></div><div className="outcome-grid">{outcomes.flatMap((row, rowIndex) => row.map((outcome) => <button className={`outcome row-${rowIndex}`} key={outcome} onClick={() => onOutcome(outcome)}>{outcomeLabels[outcome]}</button>))}</div><button className="skip-button" onClick={onSkip}>Skip details <span>→</span></button></>; }
 function DetailsTray({ details, setDetails, onContinue }: { details: PointDetails; setDetails: (details: PointDetails) => void; onContinue: () => void }) {
   const section = <T extends string>(title: string, key: keyof PointDetails, values: T[], labels?: Record<string, string>, className = "") => <div className={`detail-section ${className}`}><p>{title}</p><div>{values.map((value) => <button key={value} className={details[key] === value ? "selected" : ""} onClick={() => setDetails({ ...details, [key]: value })}>{labels?.[value] ?? value}</button>)}</div></div>;
   return <><div className="point-prompt compact"><p className="eyebrow">{details.outcome ? outcomeLabels[details.outcome] : "POINT DETAILS"}</p><h1>Add shot details</h1><p>Everything below is optional.</p></div><div className="details-tray">{section<RallyRange>("Rally length", "rallyRange", ["1-5", "6-10", "11-20", "21+"])}{section<FinalStroke>("Final stroke", "finalStroke", ["forehand", "backhand", "neither"], shotLabels, "single-line")}{section<ShotType>("Shot type", "shotType", ["groundstroke", "slice", "volley", "drop_shot", "lob", "overhead"], shotLabels, "three-column")}{section<AdvancedShotType>("Shot type — Advanced", "advancedShotType", ["passing_shot", "cross_court", "inside_out", "inside_in"], shotLabels, "two-column")}<button className="continue-button" onClick={onContinue}>Continue to next point <span>→</span></button></div></>;
@@ -215,6 +249,8 @@ function ScoreSyncModal({ match, score, onClose, onSave }: { match: MatchRecord;
   const [server, setServer] = useState<PlayerKey>(score.server);
   const [reason, setReason] = useState("Missed one or more points");
   const [tiebreak, setTiebreak] = useState<[number, number]>([7, 5]);
+  const [finishMatch, setFinishMatch] = useState(false);
+  const [finishWinner, setFinishWinner] = useState<PlayerKey>(score.winner ?? "my");
   const rule = FORMAT_RULES[match.config.format];
   const isTiebreakSet = rule.tiebreakAt !== undefined && ((games[0] === rule.tiebreakAt + 1 && games[1] === rule.tiebreakAt) || (games[1] === rule.tiebreakAt + 1 && games[0] === rule.tiebreakAt));
   const editingTiebreak = rule.tiebreakAt !== undefined && games[0] === rule.tiebreakAt && games[1] === rule.tiebreakAt;
@@ -227,7 +263,7 @@ function ScoreSyncModal({ match, score, onClose, onSave }: { match: MatchRecord;
   function changePair(setter: (value: [number, number]) => void, value: [number, number], index: 0 | 1, next: number) { const copy: [number, number] = [...value]; copy[index] = Math.max(0, next); setter(copy); }
   function save() {
     const corrected = deepCloneScore(score); corrected.games = games; corrected.points = points; corrected.server = server; corrected.inTiebreak = editingTiebreak;
-    if (isTiebreakSet || regularSetComplete) {
+    if (!finishMatch && (isTiebreakSet || regularSetComplete)) {
       const winnerIndex = games[0] > games[1] ? 0 : 1;
       corrected.sets.push(isTiebreakSet ? { games, tiebreak } : { games });
       corrected.setsWon[winnerIndex] += 1; corrected.games = [0, 0]; corrected.points = [0, 0]; corrected.inTiebreak = false;
@@ -235,9 +271,23 @@ function ScoreSyncModal({ match, score, onClose, onSave }: { match: MatchRecord;
       if (corrected.setsWon[winnerIndex] >= needed) { corrected.matchComplete = true; corrected.winner = winnerIndex === 0 ? "my" : "opponent"; }
       else if (rule.matchTiebreakThird && corrected.sets.length === 2 && corrected.setsWon[0] === 1 && corrected.setsWon[1] === 1) { corrected.inTiebreak = true; corrected.tiebreakTarget = 10; corrected.tiebreakStartServer = server; }
     }
-    onSave(corrected, reason);
+    if (finishMatch) {
+      if (games[0] || games[1] || points[0] || points[1]) corrected.sets.push({ games: [...games] });
+      corrected.games = [0, 0]; corrected.points = [0, 0]; corrected.inTiebreak = false;
+      corrected.matchComplete = true; corrected.winner = finishWinner;
+    }
+    onSave(corrected, finishMatch ? "Match completed with partially tracked data" : reason);
   }
   const pointLabel = (value: number) => editingTiebreak ? String(value) : (["0", "15", "30", "40", "AD"][value] ?? String(value));
   const pairEditor = (label: string, values: [number, number], setter: (value: [number, number]) => void, display: (value: number) => string = String) => <div className="pair-editor"><p>{label}</p>{([0, 1] as const).map((index) => <div key={index}><span>{index === 0 ? match.config.myPlayerName : match.config.opponentName}</span><button onClick={() => changePair(setter, values, index, values[index] - 1)}>−</button><strong>{display(values[index])}</strong><button onClick={() => changePair(setter, values, index, values[index] + 1)}>+</button></div>)}</div>;
-  return <div className="modal-backdrop"><section className="modal score-modal"><div className="modal-head"><div><p className="eyebrow">MISSED POINTS</p><h2>Set current score</h2></div><button onClick={onClose}>×</button></div>{score.sets.length > 0 && <div className="previous-sets"><small>COMPLETED SETS</small>{score.sets.map((set, index) => <span key={index}>Set {index + 1}: {set.games[0]}–{set.games[1]}</span>)}</div>}{pairEditor("Current-set games", games, setGames)}{pairEditor(editingTiebreak ? "Tiebreak points" : "Current-game points", points, setPoints, pointLabel)}{isTiebreakSet && pairEditor("Final tiebreak score", tiebreak, setTiebreak)}{!validFinalTiebreak && <p className="validation-error">Enter a tiebreak won by at least two points, matching the set winner.</p>}<div className="form-section inset"><h3>Current server</h3><div className="segmented"><button className={server === "my" ? "selected" : ""} onClick={() => setServer("my")}>{match.config.myPlayerName}</button><button className={server === "opponent" ? "selected" : ""} onClick={() => setServer("opponent")}>{match.config.opponentName}</button></div><label>Reason<input value={reason} onChange={(event) => setReason(event.target.value)} /></label></div><p className="fine-print">Unknown points are excluded from detailed statistics and lower the displayed tracking coverage.</p><button className="primary-button" disabled={!validFinalTiebreak} onClick={save}>Update live score</button></section></div>;
+  return <div className="modal-backdrop"><section className="modal score-modal">
+    <div className="modal-head"><div><p className="eyebrow">MISSED POINTS</p><h2>Set current score</h2></div><button onClick={onClose}>×</button></div>
+    {score.sets.length > 0 && <div className="previous-sets"><small>COMPLETED SETS</small>{score.sets.map((set, index) => <span key={index}>Set {index + 1}: {set.games[0]}–{set.games[1]}</span>)}</div>}
+    {pairEditor("Current-set games", games, setGames)}{pairEditor(editingTiebreak ? "Tiebreak points" : "Current-game points", points, setPoints, pointLabel)}
+    {isTiebreakSet && pairEditor("Final tiebreak score", tiebreak, setTiebreak)}{!validFinalTiebreak && <p className="validation-error">Enter a tiebreak won by at least two points, matching the set winner.</p>}
+    <div className="form-section inset"><h3>Current server</h3><div className="segmented"><button className={server === "my" ? "selected" : ""} onClick={() => setServer("my")}>{match.config.myPlayerName}</button><button className={server === "opponent" ? "selected" : ""} onClick={() => setServer("opponent")}>{match.config.opponentName}</button></div><label>Reason<input value={reason} onChange={(event) => setReason(event.target.value)} /></label></div>
+    <label className="finish-toggle"><input type="checkbox" checked={finishMatch} onChange={(event) => setFinishMatch(event.target.checked)} /><span><strong>Complete this match now</strong><small>Use the score above and preserve partial tracking coverage.</small></span></label>
+    {finishMatch && <div className="form-section inset"><h3>Match winner</h3><div className="segmented"><button className={finishWinner === "my" ? "selected" : ""} onClick={() => setFinishWinner("my")}>{match.config.myPlayerName}</button><button className={finishWinner === "opponent" ? "selected" : ""} onClick={() => setFinishWinner("opponent")}>{match.config.opponentName}</button></div></div>}
+    <p className="fine-print">Unknown points are excluded from detailed statistics and lower the displayed tracking coverage.</p><button className="primary-button" disabled={!validFinalTiebreak} onClick={save}>{finishMatch ? "Complete match" : "Update live score"}</button>
+  </section></div>;
 }
