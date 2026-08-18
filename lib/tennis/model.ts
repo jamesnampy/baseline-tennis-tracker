@@ -314,13 +314,23 @@ export function isErrorOutcome(outcome?: PointOutcome): boolean {
   return outcome === "return_error" || outcome === "forced_error" || outcome === "unforced_error";
 }
 
+export function usesAdvancedShotOptions(outcome?: PointOutcome): boolean {
+  return outcome === "winner" || outcome === "forced_error";
+}
+
+export function pointDetailsPlayer(point: PointCompletedEvent, outcome: PointOutcome): PlayerKey {
+  return outcome === "winner" || outcome === "return_winner" || outcome === "forced_error"
+    ? point.payload.winner
+    : point.payload.loser;
+}
+
 export function hasCompleteShotDetails(details: PointDetails): boolean {
+  const advancedComplete = !usesAdvancedShotOptions(details.outcome) || Boolean(details.shotSituation && details.advancedShotType);
   return Boolean(
     details.rallyRange &&
     details.finalStroke &&
     details.shotType &&
-    details.shotSituation &&
-    details.advancedShotType &&
+    advancedComplete &&
     (!isErrorOutcome(details.outcome) || details.ballLanding),
   );
 }

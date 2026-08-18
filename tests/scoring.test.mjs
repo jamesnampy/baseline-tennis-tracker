@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { applyPoint, initialScore, numberedPointEvents, pointScoreLabel } from "../lib/tennis/scoring.ts";
-import { eligiblePointOutcomes, hasCompleteShotDetails, isErrorOutcome, isPointOutcomeValid } from "../lib/tennis/model.ts";
+import { eligiblePointOutcomes, hasCompleteShotDetails, isErrorOutcome, isPointOutcomeValid, pointDetailsPlayer, usesAdvancedShotOptions } from "../lib/tennis/model.ts";
 import { buildStats, filterEventsForStatsScope, pointStatsScope } from "../lib/tennis/analytics.ts";
 import { buildPressureAnalytics } from "../lib/tennis/pressure.ts";
 import { createPlayerProfile, linkPlayerIdentity, playerProfileAnalytics, versionPlayerProfile } from "../lib/tennis/profiles.ts";
@@ -47,8 +47,17 @@ test("advanced tray requires one selection from each advanced row before auto-ad
   assert.equal(hasCompleteShotDetails({ ...base, shotSituation:"approach_shot" }), false);
   assert.equal(hasCompleteShotDetails({ ...base, advancedShotType:"cross_court" }), false);
   assert.equal(hasCompleteShotDetails({ ...base, shotSituation:"approach_shot",advancedShotType:"cross_court" }), true);
-  assert.equal(hasCompleteShotDetails({ ...base,outcome:"unforced_error",shotSituation:"passing_shot",advancedShotType:"inside_out" }), false);
-  assert.equal(hasCompleteShotDetails({ ...base,outcome:"unforced_error",ballLanding:"long",shotSituation:"passing_shot",advancedShotType:"inside_out" }), true);
+  assert.equal(hasCompleteShotDetails({ ...base,outcome:"unforced_error" }), false);
+  assert.equal(hasCompleteShotDetails({ ...base,outcome:"unforced_error",ballLanding:"long" }), true);
+  assert.equal(hasCompleteShotDetails({ ...base,outcome:"forced_error",ballLanding:"side",shotSituation:"approach_shot" }), false);
+  assert.equal(hasCompleteShotDetails({ ...base,outcome:"forced_error",ballLanding:"side",shotSituation:"approach_shot",advancedShotType:"inside_in" }), true);
+  assert.equal(usesAdvancedShotOptions("winner"),true); assert.equal(usesAdvancedShotOptions("forced_error"),true); assert.equal(usesAdvancedShotOptions("return_winner"),false); assert.equal(usesAdvancedShotOptions("unforced_error"),false);
+});
+
+test("winner and forced-error shot details belong to the point winner", () => {
+  const point=completedPoint("opponent");
+  assert.equal(pointDetailsPlayer(point,"winner"),"opponent"); assert.equal(pointDetailsPlayer(point,"forced_error"),"opponent"); assert.equal(pointDetailsPlayer(point,"return_winner"),"opponent");
+  assert.equal(pointDetailsPlayer(point,"unforced_error"),"my"); assert.equal(pointDetailsPlayer(point,"return_error"),"my");
 });
 
 test("timeline point numbers increase by one regardless of event sequence", () => {
@@ -89,8 +98,9 @@ test("advanced stats break shot types into errors and winner patterns", () => {
   const match=fixtureMatch(); const point=match.events[0];
   match.events.push({id:"annotation-1",matchId:match.id,schemaVersion:1,sequence:2,timestamp:new Date(1).toISOString(),source:"tracked",type:"point_annotated",pointGroupId:point.pointGroupId,payload:{outcome:"unforced_error",finalStrokePlayer:"my",shotType:"slice",shotSituation:"passing_shot",advancedShotType:"inside_out"}});
   const winner=completedPoint("my"); winner.id="winner"; winner.pointGroupId="winner-group"; winner.sequence=3; match.events.push(winner,{id:"annotation-2",matchId:match.id,schemaVersion:1,sequence:4,timestamp:new Date(2).toISOString(),source:"tracked",type:"point_annotated",pointGroupId:winner.pointGroupId,payload:{outcome:"winner",finalStrokePlayer:"my",shotType:"groundstroke",shotSituation:"approach_shot",advancedShotType:"cross_court"}});
+  const forced=completedPoint("my"); forced.id="forced"; forced.pointGroupId="forced-group"; forced.sequence=5; match.events.push(forced,{id:"annotation-3",matchId:match.id,schemaVersion:1,sequence:6,timestamp:new Date(3).toISOString(),source:"tracked",type:"point_annotated",pointGroupId:forced.pointGroupId,payload:{outcome:"forced_error",finalStrokePlayer:"my",shotType:"slice",shotSituation:"passing_shot",advancedShotType:"inside_in"}});
   const stats=buildStats(match.events,match.config);
-  assert.equal(stats.my.shotTypeOutcomes.slice.errors,1); assert.equal(stats.my.shotTypeOutcomes.groundstroke.winners,1);
+  assert.equal(stats.my.shotTypeOutcomes.slice.errors,1); assert.equal(stats.my.shotTypeOutcomes.slice.winners,1); assert.equal(stats.my.shotTypeOutcomes.slice.total,2); assert.equal(stats.my.shotTypeOutcomes.groundstroke.winners,1);
   assert.equal(stats.my.winnerPatterns.approach_shot,1); assert.equal(stats.my.winnerPatterns.cross_court,1); assert.equal(stats.my.winnerPatterns.inside_out,0);
 });
 

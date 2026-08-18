@@ -1,4 +1,4 @@
-import { FORMAT_RULES, hasCompleteShotDetails, isErrorOutcome, otherPlayer } from "./model.ts";
+import { FORMAT_RULES, hasCompleteShotDetails, otherPlayer } from "./model.ts";
 import type {
   MatchConfig,
   MatchEvent,
@@ -168,11 +168,12 @@ function applyDetails(
   if (details.finalStroke === "forehand") player.forehandOutcomes += 1;
   if (details.finalStroke === "backhand") player.backhandOutcomes += 1;
   const winningOutcome = details.outcome === "winner" || details.outcome === "return_winner";
+  const wonWithSelectedShot = winningOutcome || details.outcome === "forced_error";
   if (details.shotType) {
     const breakdown = player.shotTypeOutcomes[details.shotType];
     breakdown.total += 1;
-    if (winningOutcome) breakdown.winners += 1;
-    if (isErrorOutcome(details.outcome)) breakdown.errors += 1;
+    if (wonWithSelectedShot) breakdown.winners += 1;
+    if (details.outcome === "return_error" || details.outcome === "unforced_error") breakdown.errors += 1;
   }
   if (winningOutcome) {
     if (details.shotSituation) player.winnerPatterns[details.shotSituation] += 1;
