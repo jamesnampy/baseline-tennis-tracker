@@ -3,14 +3,18 @@
  * Builds and publishes Baseline.
  *
  * Social-preview images need an absolute URL, and a static SPA has no request
- * context to derive one from, so the origin is baked in at build time. On a
- * brand-new worker that origin is not knowable until after the first deploy —
- * so the first run deploys, reads the URL back, records it in `.env.production`,
- * and builds again. Every run after that is a single build and deploy.
+ * context to derive one from, so the origin is baked in at build time.
  *
- * Set VITE_PUBLIC_ORIGIN yourself (env var or `.env.production`) to skip the
- * discovery pass entirely — required when serving from a custom domain, since
- * the workers.dev URL would then be the wrong origin to bake in.
+ * The origin is resolved in this order:
+ *
+ *   1. VITE_PUBLIC_ORIGIN in the environment
+ *   2. VITE_PUBLIC_ORIGIN in .env.production
+ *   3. the custom domain declared in wrangler.jsonc  ← how this project runs
+ *   4. discovered from the first deploy's workers.dev URL, then recorded
+ *
+ * Reading the custom domain from wrangler.jsonc means the origin is committed
+ * config rather than an untracked file, so a fresh clone deploys correctly on
+ * the first pass with nothing to remember.
  */
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -30,11 +34,64 @@ const run = (command, args, { capture = false } = {}) =>
     shell: process.platform === "win32",
   });
 
+/**
+ * Parses JSONC. wrangler.jsonc carries comments explaining every binding, and a
+ * naive comment strip would also gut the "https://" inside any string value, so
+ * this walks the text and leaves string literals alone.
+ */
+export function parseJsonc(text) {
+  let out = "";
+  let inString = false;
+  let escaped = false;
+  let inLineComment = false;
+  let inBlockComment = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index];
+    const next = text[index + 1];
+    if (inLineComment) {
+      if (character === "\n") { inLineComment = false; out += character; }
+      continue;
+    }
+    if (inBlockComment) {
+      if (character === "*" && next === "/") { inBlockComment = false; index += 1; }
+      continue;
+    }
+    if (inString) {
+      out += character;
+      if (escaped) escaped = false;
+      else if (character === "\\") escaped = true;
+      else if (character === '"') inString = false;
+      continue;
+    }
+    if (character === '"') { inString = true; out += character; continue; }
+    if (character === "/" && next === "/") { inLineComment = true; index += 1; continue; }
+    if (character === "/" && next === "*") { inBlockComment = true; index += 1; continue; }
+    out += character;
+  }
+  return JSON.parse(out.replace(/,(\s*[}\]])/g, "$1"));
+}
+
+/** The custom domain this worker is routed to, if one is declared. */
+export function configuredCustomDomain(text = readFileSync("wrangler.jsonc", "utf8")) {
+  try {
+    const config = parseJsonc(text);
+    const route = (config.routes ?? []).find((entry) => entry?.custom_domain && typeof entry.pattern === "string");
+    if (!route) return "";
+    // A route pattern may carry a path; only the host is the origin.
+    return `https://${route.pattern.split("/")[0]}`;
+  } catch {
+    return "";
+  }
+}
+
 function recordedOrigin() {
   if (process.env.VITE_PUBLIC_ORIGIN) return process.env.VITE_PUBLIC_ORIGIN.replace(/\/$/, "");
-  if (!existsSync(ENV_FILE)) return "";
-  const match = /^VITE_PUBLIC_ORIGIN=(.*)$/m.exec(readFileSync(ENV_FILE, "utf8"));
-  return (match?.[1] ?? "").trim().replace(/\/$/, "");
+  if (existsSync(ENV_FILE)) {
+    const match = /^VITE_PUBLIC_ORIGIN=(.*)$/m.exec(readFileSync(ENV_FILE, "utf8"));
+    const fromFile = (match?.[1] ?? "").trim().replace(/\/$/, "");
+    if (fromFile) return fromFile;
+  }
+  return configuredCustomDomain();
 }
 
 function recordOrigin(origin) {
@@ -96,9 +153,12 @@ function main() {
   console.log(`\n  [90mThis two-pass build only happens once. Later deploys reuse ${ENV_FILE}.[0m\n`);
 }
 
-try {
-  main();
-} catch (error) {
-  style.fail(error instanceof Error ? error.message : String(error));
-  process.exit(1);
+// Importing this module (the config tests do) must not deploy anything.
+if (process.argv[1] && import.meta.filename === process.argv[1]) {
+  try {
+    main();
+  } catch (error) {
+    style.fail(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
 }

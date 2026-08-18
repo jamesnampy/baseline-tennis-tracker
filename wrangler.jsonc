@@ -5,6 +5,19 @@
   "compatibility_date": "2025-11-01",
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
+
+  // Served from a subdomain of a zone already on Cloudflare. `custom_domain`
+  // makes wrangler create the DNS record and provision the certificate on the
+  // first deploy; nothing has to be added in the dashboard by hand.
+  "routes": [
+    { "pattern": "baseline.jamesvibecode.com", "custom_domain": true }
+  ],
+
+  // One canonical origin. The workers.dev URL would otherwise serve the same
+  // app from a second public hostname, which is a needless extra surface for a
+  // child's match data and would split the share links people hold.
+  "workers_dev": false,
+
   "assets": {
     "directory": "./dist/client",
     "binding": "ASSETS",
@@ -15,13 +28,6 @@
     // straight from assets.
     "run_worker_first": ["/api/*", "/report/*"]
   },
-  // Hosted event store for cloud sync and live spectator links.
-  //
-  // Create it once with `npx wrangler d1 create baseline-tennis-tracker` and paste
-  // the returned id below, then apply the schema with `npm run db:migrate`. Until
-  // then the binding resolves to nothing locally and every /api/v1 route answers
-  // 503; tracking, export, and the strategy review are unaffected because the
-  // device remains the authoritative store during a match.
   // One Durable Object per match. It serializes appends so server sequence
   // numbers never race, and fans new points out to live spectators over
   // WebSockets. Removing this binding degrades cleanly: sync and the API keep
@@ -30,6 +36,13 @@
     "bindings": [{ "name": "MATCH_ROOM", "class_name": "MatchRoom" }]
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["MatchRoom"] }],
+
+  // Hosted event store for cloud sync and live spectator links.
+  //
+  // `npm run setup:cloudflare` creates the database and fills in the id below.
+  // Until then the binding resolves to nothing and every /api/v1 route answers
+  // 503; tracking, export, and the strategy review are unaffected because the
+  // device remains the authoritative store during a match.
   "d1_databases": [
     {
       "binding": "DB",

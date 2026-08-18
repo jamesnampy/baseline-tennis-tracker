@@ -60,14 +60,29 @@ Three commands. The first opens a browser and has to be run by hand; the other t
 ```bash
 npx wrangler login          # interactive, once per machine
 npm run setup:cloudflare    # creates D1, writes its id, migrates, generates SYNC_TOKEN
-npm run deploy              # builds and publishes
+npm run deploy              # builds and publishes to baseline.jamesvibecode.com
 ```
 
 `setup:cloudflare` is safe to re-run — every step checks for its own result first, so a half-finished setup resumes rather than restarting. It never deploys, and it will not overwrite a `SYNC_TOKEN` it cannot first confirm is absent, because replacing a live one would silently stop every device already syncing. Pass `--dry-run` to see what it would do.
 
 It prints the generated `SYNC_TOKEN` once. Save it: Cloudflare cannot show it again, and it is what you paste into the app's Export screen to turn on cloud sync.
 
-`deploy` bakes the public origin into the build so social-preview images resolve to absolute URLs. On a brand-new worker that origin is not knowable until the first deploy has happened, so the first run deploys, reads the URL back, records it in `.env.production`, and builds again. Later runs are a single pass. Serving from a custom domain? Set `VITE_PUBLIC_ORIGIN` yourself first — the workers.dev URL would be the wrong origin to bake in.
+`deploy` bakes the public origin into the build so social-preview images resolve to absolute URLs. It resolves that origin from `VITE_PUBLIC_ORIGIN`, then `.env.production`, then the custom domain in `wrangler.jsonc` — which is how this project runs, so a fresh clone deploys correctly on the first pass with nothing to remember. With none of those, it falls back to deploying once, reading the workers.dev URL back, and rebuilding.
+
+### Custom domain
+
+The app is served from `baseline.jamesvibecode.com`, declared in `wrangler.jsonc`:
+
+```jsonc
+"routes": [{ "pattern": "baseline.jamesvibecode.com", "custom_domain": true }],
+"workers_dev": false
+```
+
+Because the zone is already on Cloudflare, `custom_domain: true` makes wrangler create the DNS record and provision the certificate on the first deploy — nothing to add in the dashboard. Certificate issuance takes a few minutes, so the first request can fail TLS before it succeeds.
+
+`workers_dev` is off deliberately: the workers.dev URL would serve the same app from a second public hostname, which is a needless extra surface for a child's match data and would split the share links people are holding. Turn it back on if you want a staging URL.
+
+If a DNS record for the subdomain already exists, wrangler stops and asks rather than overwriting it — delete the record first, then deploy.
 
 For the hosted AI strategy review, add the key any time:
 
