@@ -18,6 +18,7 @@
  */
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 const ENV_FILE = ".env.production";
 const style = {
@@ -27,12 +28,42 @@ const style = {
   fail: (text) => console.error(`\n[31m✗ ${text}[0m`),
 };
 
-const run = (command, args, { capture = false } = {}) =>
-  execFileSync(command, args, {
-    encoding: "utf8",
-    stdio: capture ? ["inherit", "pipe", "inherit"] : "inherit",
-    shell: process.platform === "win32",
-  });
+/**
+ * Runs the locally installed wrangler directly with node.
+ *
+ * Going through `npx` needs shell:true on Windows, which Node deprecates
+ * (DEP0190) because arguments are concatenated rather than escaped. Every
+ * argument here is a literal, so nothing was actually at risk - but resolving
+ * the bin and skipping the shell removes the warning and a process hop.
+ */
+/** Path to a locally installed CLI's entry script, or null if it is not there. */
+function localBin(...segments) {
+  const local = resolve("node_modules", ...segments);
+  return existsSync(local) ? local : null;
+}
+
+const wranglerBin = () => localBin("wrangler", "bin", "wrangler.js");
+const viteBin = () => localBin("vite", "bin", "vite.js");
+
+/**
+ * Builds without going through npm.
+ *
+ * Node refuses to spawn a .cmd shim without shell:true on Windows, so
+ * `npm.cmd run build` fails with EINVAL. Running vite's own entry script with
+ * node sidesteps the shim entirely and behaves the same on every platform.
+ */
+const build = () => {
+  const bin = viteBin();
+  if (bin) return execFileSync(process.execPath, [bin, "build"], { encoding: "utf8", stdio: "inherit" });
+  return execFileSync("npm", ["run", "build"], { encoding: "utf8", stdio: "inherit", shell: true });
+};
+
+const deploy = ({ capture = false } = {}) => {
+  const bin = wranglerBin();
+  const stdio = capture ? ["inherit", "pipe", "inherit"] : "inherit";
+  if (bin) return execFileSync(process.execPath, [bin, "deploy"], { encoding: "utf8", stdio });
+  return execFileSync("npx", ["wrangler", "deploy"], { encoding: "utf8", stdio, shell: process.platform === "win32" });
+};
 
 /**
  * Parses JSONC. wrangler.jsonc carries comments explaining every binding, and a
@@ -126,10 +157,10 @@ function main() {
   const known = recordedOrigin();
 
   style.step(known ? `Building for ${known}` : "Building (public origin not yet known)");
-  run("npm", ["run", "build"]);
+  build();
 
   style.step("Deploying to Cloudflare");
-  const output = run("npx", ["wrangler", "deploy"], { capture: !known });
+  const output = deploy({ capture: !known });
   if (!known) process.stdout.write(output ?? "");
 
   if (known) {
@@ -147,8 +178,8 @@ function main() {
   recordOrigin(url);
   style.ok(`Discovered ${url} and recorded it in ${ENV_FILE}`);
   style.step("Rebuilding with the real origin and redeploying");
-  run("npm", ["run", "build"]);
-  run("npx", ["wrangler", "deploy"]);
+  build();
+  deploy();
   style.ok(`Deployed. Open ${url}`);
   console.log(`\n  [90mThis two-pass build only happens once. Later deploys reuse ${ENV_FILE}.[0m\n`);
 }

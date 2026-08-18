@@ -14,7 +14,8 @@
  */
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 
 const WRANGLER_CONFIG = "wrangler.jsonc";
@@ -32,27 +33,41 @@ const style = {
   fail: (text) => console.error(`\n[31m✗ ${text}[0m`),
 };
 
+/**
+ * Runs the locally installed wrangler directly with node.
+ *
+ * Going through `npx` needs shell:true on Windows, which Node deprecates
+ * (DEP0190) because arguments are concatenated rather than escaped. Every
+ * argument here is a literal, so nothing was actually at risk - but resolving
+ * the bin and skipping the shell removes the warning and a process hop.
+ */
+function wranglerBin() {
+  const local = resolve("node_modules", "wrangler", "bin", "wrangler.js");
+  return existsSync(local) ? local : null;
+}
+
+function runWrangler(args, { capture = true, input } = {}) {
+  const bin = wranglerBin();
+  const stdio = capture ? ["pipe", "pipe", "pipe"] : "inherit";
+  if (bin) {
+    return execFileSync(process.execPath, [bin, ...args], { encoding: "utf8", stdio, input });
+  }
+  return execFileSync("npx", ["wrangler", ...args], { encoding: "utf8", stdio, input, shell: process.platform === "win32" });
+}
+
 function wrangler(args, { capture = true, input } = {}) {
   if (dryRun) {
     console.log(`  [90m[dry run] wrangler ${args.join(" ")}[0m`);
     return "";
   }
-  return execFileSync("npx", ["wrangler", ...args], {
-    encoding: "utf8",
-    stdio: capture ? ["pipe", "pipe", "pipe"] : "inherit",
-    input,
-    shell: process.platform === "win32",
-  });
+  return runWrangler(args, { capture, input });
 }
 
 function requireLogin() {
   style.step("Checking Cloudflare authentication");
   let output;
   try {
-    output = execFileSync("npx", ["wrangler", "whoami"], {
-      encoding: "utf8",
-      shell: process.platform === "win32",
-    });
+    output = runWrangler(["whoami"]);
   } catch {
     output = "";
   }
@@ -91,7 +106,7 @@ function ensureDatabase() {
   found = existing.find((database) => database.name === DATABASE_NAME);
   if (!found && !dryRun) throw new Error(`Created "${DATABASE_NAME}" but could not read its id back from d1 list.`);
   if (found) style.ok(`Created (${found.uuid})`);
-  return found?.uuid ?? PLACEHOLDER;
+  return found?.uuid ?? "";
 }
 
 /**
@@ -100,6 +115,10 @@ function ensureDatabase() {
  */
 function writeDatabaseId(databaseId) {
   style.step("Writing the database id into wrangler.jsonc");
+  if (!databaseId) {
+    style.skip("[dry run] would write the id of the database it just created");
+    return;
+  }
   const config = readFileSync(WRANGLER_CONFIG, "utf8");
   const current = /"database_id":\s*"([^"]*)"/.exec(config);
   if (!current) throw new Error(`No database_id field found in ${WRANGLER_CONFIG}.`);
@@ -137,15 +156,18 @@ function syncTokenExists() {
     let output;
     try {
       output = wrangler(args);
-    } catch {
-      continue;
+    } catch (error) {
+      output = String(error?.stdout ?? "") + String(error?.stderr ?? "");
     }
     if (dryRun) return true;
+    // Secrets live on the Worker, so they cannot be set until it exists. On a
+    // first run this is the expected state, not a failure.
+    if (/Worker .*not found|not_found|10007/i.test(output)) return "no-worker";
     try {
       const parsed = JSON.parse(output);
       if (Array.isArray(parsed)) return parsed.some((secret) => secret?.name === "SYNC_TOKEN");
     } catch {
-      if (/\bSYNC_TOKEN\b/.test(output)) return true;
+      if (/SYNC_TOKEN/.test(output)) return true;
       // A readable listing with no SYNC_TOKEN in it is a real "no".
       if (/secret|name/i.test(output)) return false;
     }
@@ -156,7 +178,14 @@ function syncTokenExists() {
 async function ensureSyncToken(rl) {
   style.step("Setting the SYNC_TOKEN secret");
   const exists = syncTokenExists();
-  if (exists) {
+  if (exists === "no-worker") {
+    style.skip("The Worker does not exist yet, so there is nothing to hold a secret.");
+    console.log("\n  Deploy first, then run this again to generate the token:\n");
+    console.log("      npm run deploy");
+    console.log("      npm run setup:cloudflare\n");
+    return "pending-deploy";
+  }
+  if (exists === true) {
     style.skip("Already set. Run `npx wrangler secret put SYNC_TOKEN` to rotate it.");
     return null;
   }
@@ -191,11 +220,16 @@ async function main() {
   applyMigrations();
 
   const rl = createInterface({ input: process.stdin, output: process.stdout });
+  let tokenState;
   try {
-    await ensureSyncToken(rl);
+    tokenState = await ensureSyncToken(rl);
   } finally {
     rl.close();
   }
+
+  // Nothing more to say until the Worker exists; ensureSyncToken already
+  // printed the two commands that finish the job.
+  if (tokenState === "pending-deploy") return;
 
   style.step("Setup complete");
   console.log(`
@@ -205,7 +239,7 @@ async function main() {
   Then publish:
       npm run deploy
 
-  [90mDeploying makes the app reachable at its workers.dev URL. Matches stay on
+  [90mDeploying publishes the tracker at its configured domain. Matches stay on
   the device until you enable cloud sync, and the API refuses every request
   without the SYNC_TOKEN, so nothing is exposed by the deploy itself.[0m
 `);

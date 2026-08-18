@@ -47,7 +47,7 @@
     {
       "binding": "DB",
       "database_name": "baseline-tennis-tracker",
-      "database_id": "REPLACE_WITH_D1_DATABASE_ID",
+      "database_id": "c47373db-7afd-4192-bdea-89d82255f1f0",
       "migrations_dir": "./drizzle"
     }
   ]
