@@ -84,6 +84,19 @@ Redaction happens in the Worker, before anything leaves it:
 
 Spectators replay the same `lib/tennis/` projections the tracker uses, so there is no second scoring engine to keep in step.
 
+## Coach reports
+
+A coach report can be sent two ways, and both come from the same builder so they never diverge:
+
+- **A link.** `POST /api/v1/matches/:id/share` with `kind: "report"` mints `/report/<token>`, a private page the coach opens on any device. The Worker renders it server-side — no app bundle, no sign-in.
+- **A download.** The self-contained HTML file still works with no connection at all, which is what section 18 requires alongside the hosted page.
+
+The report carries a two-player statistics table with numerator, denominator, sample size, and tracking coverage on every rate; **shot analytics** (stroke impact, net conversion, return quality, per-shot-type impact, points by rally length, winner patterns); set-by-set and point-by-point timelines; evidence-based observations kept separate from recommendations; and data-quality disclosures.
+
+The link's own privacy flags overrule the report options it was created with, so a report link can never disclose the opponent's name, mental-state observations, or the timeline when it was created without them. Report pages are served `no-store` with `X-Robots-Tag: noindex, nofollow, noarchive`, and revoked or expired links stop resolving immediately.
+
+A report link is a snapshot of the match as it stands when the page loads. After correcting a match, mint a new link rather than assuming the coach re-reads the old one.
+
 ## Live spectator view
 
 `/live/<token>` is a read-only page that follows a match as it is tracked: scoreboard, both-player statistics, and the point timeline, all projected from the redacted event stream.

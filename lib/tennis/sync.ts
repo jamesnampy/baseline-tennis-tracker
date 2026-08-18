@@ -16,6 +16,7 @@
  * duplicate push costs a round trip and nothing else.
  */
 import type { IdentityMapping, MatchRecord, PlayerProfile } from "./model.ts";
+import type { CoachReportOptions } from "./report.ts";
 import { loadSyncState, saveSyncState, type MatchSyncState } from "./storage.ts";
 
 const SETTINGS_KEY = "baseline.sync.settings";
@@ -205,6 +206,8 @@ export interface ShareLinkRequest {
   includeMentalStates?: boolean;
   includeTimeline?: boolean;
   opponentDisplay?: "full" | "initials" | "hidden";
+  /** Report links only. The link's own privacy flags still overrule these. */
+  reportOptions?: Partial<CoachReportOptions>;
   label?: string;
 }
 
@@ -212,6 +215,7 @@ export interface ShareLinkResponse {
   id: string;
   token: string;
   url: string;
+  kind: string;
   expiresAt: string | null;
   opponentDisplay: string;
   includeMentalStates: boolean;
@@ -232,12 +236,21 @@ export async function createShareLink(
   return (await response.json()) as ShareLinkResponse;
 }
 
-export async function listShareLinks(matchId: string, settings: SyncSettings = loadSyncSettings()) {
+export interface ShareLink {
+  id: string;
+  kind: string;
+  active: boolean;
+  expiresAt: string | null;
+  opponentDisplay: string;
+  createdAt: string;
+}
+
+export async function listShareLinks(matchId: string, settings: SyncSettings = loadSyncSettings()): Promise<ShareLink[]> {
   const response = await fetch(`${settings.endpoint}/api/v1/matches/${matchId}/share`, {
     headers: { authorization: `Bearer ${settings.token}` },
   });
   if (!response.ok) throw new Error(`Could not list links (${response.status}).`);
-  const body = (await response.json()) as { links: { id: string; active: boolean; expiresAt: string | null; opponentDisplay: string; createdAt: string }[] };
+  const body = (await response.json()) as { links: ShareLink[] };
   return body.links;
 }
 

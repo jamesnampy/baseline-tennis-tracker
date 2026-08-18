@@ -321,8 +321,8 @@ export async function listIdentityMappingRows(db: D1Database) {
 export async function insertShareLink(db: D1Database, link: ShareLinkRow): Promise<void> {
   await db
     .prepare(
-      "INSERT INTO share_links (id, token_hash, match_id, kind, created_at, expires_at, revoked_at, include_mental_states, opponent_display, include_timeline, label)" +
-      " VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7, ?8, ?9, ?10)",
+      "INSERT INTO share_links (id, token_hash, match_id, kind, created_at, expires_at, revoked_at, include_mental_states, opponent_display, include_timeline, report_options, label)" +
+      " VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7, ?8, ?9, ?10, ?11)",
     )
     .bind(
       link.id,
@@ -334,6 +334,7 @@ export async function insertShareLink(db: D1Database, link: ShareLinkRow): Promi
       link.include_mental_states,
       link.opponent_display,
       link.include_timeline,
+      link.report_options,
       link.label,
     )
     .run();

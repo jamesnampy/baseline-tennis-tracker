@@ -18,7 +18,7 @@ import {
 import { deleteMatch, loadIdentityMappings, loadMatches, loadPlayers, loadSyncStates, saveIdentityMapping, saveMatch, savePlayer, type MatchSyncState } from "@/lib/tennis/storage";
 import {
   createShareLink, flushOutbox, listShareLinks, loadSyncSettings, pendingEventCount,
-  pushMatch, revokeShareLink, saveSyncSettings, type ShareLinkResponse, type SyncSettings,
+  pushMatch, revokeShareLink, saveSyncSettings, type ShareLink, type ShareLinkResponse, type SyncSettings,
 } from "@/lib/tennis/sync";
 
 type Tab = "track" | "stats" | "timeline" | "match";
@@ -151,7 +151,7 @@ function DataHub({ view, setView, players, matches, mappings, onMap }: { view: "
   return <main className="app-shell data-screen"><header className="simple-header"><button onClick={()=>setView("matches")}>‹</button><div><p className="eyebrow">BASELINE DATA</p><strong>{view === "profiles" ? "Player profiles" : view === "export" ? "Analysis export" : "Coach reports"}</strong></div><span /></header><div className="data-scroll">
     {view==="profiles"&&<><section className="data-intro"><h1>Player profiles</h1><p>Stable identities connect authorized matches without rewriting history.</p></section>{players.length?<><label className="data-select">Player<select value={selectedPlayer?.id} onChange={(e)=>setPlayerId(e.target.value)}>{players.map((p)=><option value={p.id} key={p.id}>{p.displayName}</option>)}</select></label>{profileStats&&<div className="profile-metrics"><span><b>{profileStats.matchCount}</b><small>matches</small></span><span><b>{profileStats.trackedPoints}</b><small>tracked points</small></span><span><b>{profileStats.coverage}%</b><small>coverage</small></span><span><b>{profileStats.pointsWon}</b><small>points won</small></span></div>}<section className="data-card"><h2>Auditable identity link</h2><select value={fromId} onChange={(e)=>setFromId(e.target.value)}><option value="">Choose guest or duplicate</option>{players.filter((p)=>p.id!==selectedPlayer?.id).map((p)=><option value={p.id} key={p.id}>{p.displayName}</option>)}</select><button disabled={!fromId||!selectedPlayer} onClick={()=>{if(selectedPlayer){onMap(linkPlayerIdentity(fromId,selectedPlayer.id));setFromId("")}}}>Link to {selectedPlayer?.displayName}</button><p>Creates a mapping record; original match and event IDs remain unchanged.</p></section><section className="data-card"><h2>Pressure samples across selected match</h2>{pressure&&(["my","opponent"] as PlayerKey[]).map((key)=><p key={key}><strong>{playerName(selectedMatch.config,key)}</strong> · {pressure[key].won}/{pressure[key].played} won · coverage {pressure[key].trackedPoints}/{pressure[key].estimatedPoints} ({pressure[key].coverage}%)</p>)}</section></>:<div className="empty-card">Create profiles from New Match setup.</div>}</>}
     {view==="export"&&<><section className="data-intro"><h1>Codex / Claude export</h1><p>One ZIP containing portable CSV tables, lossless events, schema, manifest, API contract, and a coach report.</p></section><label className="data-select">Scope<select value={matchId} onChange={(e)=>setMatchId(e.target.value)}><option value="">All authorized matches</option>{matches.map((m)=><option value={m.id} key={m.id}>{m.config.myPlayerName} vs. {m.config.opponentName}</option>)}</select></label><label className="check-row"><input type="checkbox" checked={anonymize} onChange={(e)=>setAnonymize(e.target.checked)}/>Anonymize names and private profile fields</label><div className="file-grid">{["matches.csv","players.csv","identity_mappings.csv","points.csv","serves.csv","shots.csv","mental_states.csv","score_syncs.csv","events.json","schema.json","manifest.json","match-report.html"].map((name)=><span key={name}>✓ {name}</span>)}</div><button className="primary-button" disabled={!matches.length} onClick={()=>{const scope=matchId&&selectedMatch?[selectedMatch]:matches.filter((m)=>m.authorized!==false);const bundle=buildExportBundle(scope,players,mappings,anonymize,selectedMatch?{match:selectedMatch,options}:undefined);saveBlob("baseline-analysis.zip",zipFiles(bundle.files))}}>Download complete ZIP</button><CloudSyncCard matches={matches} players={players} mappings={mappings} /></>}
-    {view==="reports"&&<><section className="data-intro"><h1>Coach report</h1><p>Create a private, self-contained HTML snapshot. Free-form notes stay excluded unless selected.</p></section><label className="data-select">Match<select value={matchId} onChange={(e)=>setMatchId(e.target.value)}>{matches.map((m)=><option value={m.id} key={m.id}>{m.config.myPlayerName} vs. {m.config.opponentName}</option>)}</select></label><section className="data-card report-options">{Object.entries({opponentIdentity:"Opponent identity",matchStats:"Match stats",timeline:"Timelines",mentalStates:"Mental-state progression",mentalNotes:"Mental-state notes",recommendations:"Coaching recommendations"}).map(([key,label])=><label key={key}><input type="checkbox" checked={options[key as keyof CoachReportOptions]} onChange={(e)=>setOptions((current)=>({...current,[key]:e.target.checked}))}/>{label}</label>)}</section><button className="primary-button" disabled={!selectedMatch} onClick={()=>selectedMatch&&saveBlob("baseline-coach-report.html",new Blob([buildCoachReport(selectedMatch,options)],{type:"text/html"}))}>Download self-contained HTML</button>{selectedMatch&&<ShareLinkCard match={selectedMatch} />}</>}
+    {view==="reports"&&<><section className="data-intro"><h1>Coach report</h1><p>Create a private, self-contained HTML snapshot. Free-form notes stay excluded unless selected.</p></section><label className="data-select">Match<select value={matchId} onChange={(e)=>setMatchId(e.target.value)}>{matches.map((m)=><option value={m.id} key={m.id}>{m.config.myPlayerName} vs. {m.config.opponentName}</option>)}</select></label><section className="data-card report-options">{Object.entries({opponentIdentity:"Opponent identity",matchStats:"Match stats",shotAnalytics:"Shot analytics",timeline:"Timelines",mentalStates:"Mental-state progression",mentalNotes:"Mental-state notes",recommendations:"Coaching recommendations"}).map(([key,label])=><label key={key}><input type="checkbox" checked={options[key as keyof CoachReportOptions]} onChange={(e)=>setOptions((current)=>({...current,[key]:e.target.checked}))}/>{label}</label>)}</section><button className="primary-button" disabled={!selectedMatch} onClick={()=>selectedMatch&&saveBlob("baseline-coach-report.html",new Blob([buildCoachReport(selectedMatch,options)],{type:"text/html"}))}>Download self-contained HTML</button>{selectedMatch&&<ReportLinkCard match={selectedMatch} options={options} />}{selectedMatch&&<ShareLinkCard match={selectedMatch} />}</>}
   </div><HomeNav view={view} setView={setView}/></main>;
 }
 
@@ -193,13 +193,61 @@ function CloudSyncCard({ matches, players, mappings }: { matches: MatchRecord[];
   </section>;
 }
 
+function ShareLinkList({ links, onRevoke }: { links: ShareLink[]; onRevoke: (id: string) => void }) {
+  if (!links.length) return null;
+  return <div className="link-list">{links.map((link) => <span key={link.id}>{link.active ? "● " : "○ "}{new Date(link.createdAt).toLocaleString()} · {link.opponentDisplay}{link.active && <button className="text-button" onClick={() => onRevoke(link.id)}>Revoke</button>}</span>)}</div>;
+}
+
 /**
- * Live and report links (requirements sections 18 and 19). Every privacy choice
- * here is enforced in the Worker, not in the page the recipient loads, so a link
- * cannot be made to reveal more than it was created with.
+ * A coach report as a link rather than a file (requirements section 18: the
+ * report is available both as a mobile-friendly web page and as a download).
+ *
+ * The page is rendered by the Worker from the same builder as the download, and
+ * the link's own privacy flags overrule the report options, so a link can never
+ * show more than it was created with. Revoking it stops the page immediately.
+ */
+function ReportLinkCard({ match, options }: { match: MatchRecord; options: CoachReportOptions }) {
+  const [links, setLinks] = useState<ShareLink[]>([]);
+  const [created, setCreated] = useState<ShareLinkResponse>();
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [expiresInHours, setExpiresInHours] = useState(168);
+  const enabled = loadSyncSettings().enabled;
+  const refresh = () => { listShareLinks(match.id).then((rows) => setLinks(rows.filter((link) => link.kind === "report"))).catch(() => setLinks([])); };
+  useEffect(() => { if (enabled) refresh(); }, [match.id, enabled]); // eslint-disable-line react-hooks/exhaustive-deps
+  async function create() {
+    setBusy(true); setError(""); setCreated(undefined);
+    try {
+      setCreated(await createShareLink(match.id, {
+        kind: "report",
+        expiresInHours,
+        // The report checkboxes above drive both the download and the link.
+        opponentDisplay: options.opponentIdentity ? "full" : "initials",
+        includeMentalStates: options.mentalStates,
+        includeTimeline: options.timeline,
+        reportOptions: options,
+      }));
+      refresh();
+    } catch (failure) { setError(failure instanceof Error ? failure.message : "Could not create the link."); }
+    setBusy(false);
+  }
+  if (!enabled) return <section className="data-card"><h2>Send the report as a link</h2><p>Turn on cloud sync in Export to send a coach a link instead of a file. The download above works with no connection at all.</p></section>;
+  return <section className="data-card"><h2>Send the report as a link</h2><p>Publishes the report above as a private page a coach can open on any device. It uses the same options you selected, is excluded from search indexing, and can be revoked at any time. Regenerate a link after correcting the match—an existing link keeps showing what the coach already reviewed.</p>
+    <label className="data-select">Link expires after<select value={expiresInHours} onChange={(event) => setExpiresInHours(Number(event.target.value))}><option value={24}>24 hours</option><option value={168}>7 days</option><option value={720}>30 days</option><option value={0}>Until revoked</option></select></label>
+    <button disabled={busy} onClick={create}>{busy ? "Publishing…" : "Create report link"}</button>
+    {error && <p className="validation-error">{error}</p>}
+    {created && <p className="share-url">{created.url}<small>Copy it now&mdash;the link is shown once.</small></p>}
+    <ShareLinkList links={links} onRevoke={(id) => revokeShareLink(id).then(refresh).catch(() => undefined)} />
+  </section>;
+}
+
+/**
+ * Live links (requirements sections 18 and 19). Every privacy choice here is
+ * enforced in the Worker, not in the page the recipient loads, so a link cannot
+ * be made to reveal more than it was created with.
  */
 function ShareLinkCard({ match }: { match: MatchRecord }) {
-  const [links, setLinks] = useState<{ id: string; active: boolean; expiresAt: string | null; opponentDisplay: string; createdAt: string }[]>([]);
+  const [links, setLinks] = useState<ShareLink[]>([]);
   const [created, setCreated] = useState<ShareLinkResponse>();
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -208,7 +256,7 @@ function ShareLinkCard({ match }: { match: MatchRecord }) {
   const [includeTimeline, setIncludeTimeline] = useState(true);
   const [expiresInHours, setExpiresInHours] = useState(24);
   const enabled = loadSyncSettings().enabled;
-  const refresh = () => { listShareLinks(match.id).then(setLinks).catch(() => setLinks([])); };
+  const refresh = () => { listShareLinks(match.id).then((rows) => setLinks(rows.filter((link) => link.kind !== "report"))).catch(() => setLinks([])); };
   useEffect(() => { if (enabled) refresh(); }, [match.id, enabled]); // eslint-disable-line react-hooks/exhaustive-deps
   async function create() {
     setBusy(true); setError(""); setCreated(undefined);
@@ -225,7 +273,7 @@ function ShareLinkCard({ match }: { match: MatchRecord }) {
     <button disabled={busy} onClick={create}>{busy ? "Creating…" : "Create live link"}</button>
     {error && <p className="validation-error">{error}</p>}
     {created && <p className="share-url">{created.url}<small>Copy it now&mdash;the link is shown once.</small></p>}
-    {links.length > 0 && <div className="link-list">{links.map((link) => <span key={link.id}>{link.active ? "● " : "○ "}{new Date(link.createdAt).toLocaleString()} · {link.opponentDisplay}{link.active && <button className="text-button" onClick={() => revokeShareLink(link.id).then(refresh).catch(() => undefined)}>Revoke</button>}</span>)}</div>}
+    <ShareLinkList links={links} onRevoke={(id) => revokeShareLink(id).then(refresh).catch(() => undefined)} />
   </section>;
 }
 

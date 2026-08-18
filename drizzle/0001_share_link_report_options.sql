@@ -1,0 +1,1 @@
+ALTER TABLE `share_links` ADD `report_options` text;

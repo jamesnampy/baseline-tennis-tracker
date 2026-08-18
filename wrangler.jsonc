@@ -11,8 +11,9 @@
     // The tracker is a client-side SPA: unknown paths must return index.html
     // rather than a 404, so deep links and the installed PWA both resolve.
     "not_found_handling": "single-page-application",
-    // Everything except the API is served straight from assets.
-    "run_worker_first": ["/api/*"]
+    // Everything except the API and server-rendered coach reports is served
+    // straight from assets.
+    "run_worker_first": ["/api/*", "/report/*"]
   },
   // Hosted event store for cloud sync and live spectator links.
   //

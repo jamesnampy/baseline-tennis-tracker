@@ -13,6 +13,7 @@
  */
 import { buildStats } from "@/lib/tennis/analytics.ts";
 import { buildExportBundle, staleStrategyEventIds } from "@/lib/tennis/export.ts";
+import { buildCoachReport, type CoachReportOptions } from "@/lib/tennis/report.ts";
 import { DATASET_VERSION } from "@/lib/tennis/model.ts";
 import type { MatchEvent, MatchRecord } from "@/lib/tennis/model.ts";
 import { buildPressureAnalytics } from "@/lib/tennis/pressure.ts";
@@ -31,6 +32,7 @@ import {
   newShareToken,
   redactEvents,
   redactMatch,
+  reportOptionsForLink,
   shareLinkSummary,
   type OpponentDisplay,
 } from "./share.ts";
@@ -370,8 +372,10 @@ async function handleCreateShareLink(request: Request, db: D1Database, matchId: 
     includeMentalStates?: boolean;
     includeTimeline?: boolean;
     opponentDisplay?: OpponentDisplay;
+    reportOptions?: Partial<CoachReportOptions>;
     label?: string;
   }>(request)) ?? {};
+  const kind = body.kind ?? "live";
 
   const token = newShareToken();
   const createdAt = new Date();
@@ -383,13 +387,14 @@ async function handleCreateShareLink(request: Request, db: D1Database, matchId: 
     id: crypto.randomUUID(),
     token_hash: await hashShareToken(token),
     match_id: matchId,
-    kind: body.kind ?? "live",
+    kind,
     created_at: createdAt.toISOString(),
     expires_at: expiresAt,
     revoked_at: null,
     include_mental_states: body.includeMentalStates ? 1 : 0,
     opponent_display: body.opponentDisplay ?? "initials",
     include_timeline: body.includeTimeline === false ? 0 : 1,
+    report_options: kind === "report" && body.reportOptions ? JSON.stringify(body.reportOptions) : null,
     label: body.label ?? null,
   };
   await insertShareLink(db, link);
@@ -397,7 +402,7 @@ async function handleCreateShareLink(request: Request, db: D1Database, matchId: 
     ...shareLinkSummary(link),
     // Returned exactly once: only the hash is stored.
     token,
-    url: `${url.origin}/live/${token}`,
+    url: `${url.origin}/${kind === "report" ? "report" : "live"}/${token}`,
   }, 201);
 }
 
@@ -470,6 +475,53 @@ async function handleLiveRequest(request: Request, env: ApiEnv, segments: string
   });
 }
 
+export const REPORT_PREFIX = "/report/";
+
+/**
+ * Serves a coach report as a page rather than a download (requirements section
+ * 18: the report is available both as a mobile-friendly web page and as a
+ * self-contained HTML file).
+ *
+ * It renders one immutable snapshot of the match as it stands when the page is
+ * loaded, built by the same `buildCoachReport` the download uses. Redaction
+ * happens before the builder sees the match, and the link row overrules the
+ * stored report options on every privacy-bearing field, so a report link can
+ * never show more than it was created with.
+ */
+export async function handleReportRequest(request: Request, env: ApiEnv, url: URL): Promise<Response> {
+  const db = requireDatabase(env);
+  if (db instanceof Response) return db;
+  const token = url.pathname.slice(REPORT_PREFIX.length).replace(/\/$/, "");
+  if (!token) return reportUnavailable();
+  if (request.method !== "GET") return new Response("Method not allowed.", { status: 405 });
+
+  const link = await findShareLinkByHash(db, await hashShareToken(token));
+  // Revoked, expired, unknown, and wrong-kind all answer identically.
+  if (!link || !isLinkUsable(link) || link.kind !== "report") return reportUnavailable();
+
+  const match = await loadMatch(db, link.match_id);
+  if (!match) return reportUnavailable();
+
+  const html = buildCoachReport(redactMatch(match, link), reportOptionsForLink(link));
+  return new Response(html, {
+    headers: {
+      "content-type": "text/html; charset=utf-8",
+      // Section 19: shared reports are excluded from search indexing, and a
+      // revoked link must stop working immediately rather than sit in a cache.
+      "x-robots-tag": "noindex, nofollow, noarchive",
+      "cache-control": "no-store, private",
+      "referrer-policy": "no-referrer",
+    },
+  });
+}
+
+function reportUnavailable(): Response {
+  return new Response(
+    `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="robots" content="noindex,nofollow"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Report unavailable</title><style>body{font:15px/1.5 system-ui,sans-serif;color:#102c2c;background:#fbf9f3;display:grid;place-items:center;min-height:100vh;margin:0;padding:24px;text-align:center}p{color:#687976;max-width:320px}</style></head><body><div><h1>Report unavailable</h1><p>This link has expired, been revoked, or never existed.</p></div></body></html>`,
+    { status: 404, headers: { "content-type": "text/html; charset=utf-8", "x-robots-tag": "noindex, nofollow", "cache-control": "no-store" } },
+  );
+}
+
 function contractDescriptor(env: ApiEnv) {
   return {
     apiVersion: API_VERSION,
@@ -497,6 +549,8 @@ function contractDescriptor(env: ApiEnv) {
       { method: "DELETE", path: `${API_PREFIX}/share/:id`, description: "Revoke a link." },
       { method: "GET", path: `${API_PREFIX}/live/:token`, description: "Public redacted snapshot for one share link.", authentication: "share token only" },
       { method: "GET", path: `${API_PREFIX}/live/:token/events`, description: "Incremental redacted events.", filters: ["sinceSeq"] },
+      { method: "GET", path: `${API_PREFIX}/live/:token/socket`, description: "WebSocket of redacted events for one share link.", authentication: "share token only" },
+      { method: "GET", path: "/report/:token", description: "Coach report rendered as a page for one report link.", authentication: "share token only" },
     ],
     guarantees: [
       "The exported representation matches the downloadable bundle schema.",

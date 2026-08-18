@@ -95,6 +95,8 @@ export const shareLinks = sqliteTable("share_links", {
   /** `full`, `initials`, or `hidden`. */
   opponentDisplay: text("opponent_display").notNull().default("initials"),
   includeTimeline: integer("include_timeline").notNull().default(1),
+  /** Serialized CoachReportOptions for `report` links. Null for live links. */
+  reportOptions: text("report_options"),
   label: text("label"),
 }, (table) => [
   uniqueIndex("share_links_token_idx").on(table.tokenHash),

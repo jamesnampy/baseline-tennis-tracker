@@ -41,6 +41,7 @@ const viewerLink = (viewer: Viewer): ShareLinkRow => ({
   include_mental_states: viewer.includeMentalStates,
   opponent_display: viewer.opponentDisplay,
   include_timeline: viewer.includeTimeline,
+  report_options: null,
   label: null,
 });
 

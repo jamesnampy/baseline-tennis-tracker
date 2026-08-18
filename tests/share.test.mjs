@@ -8,7 +8,9 @@ import {
   newShareToken,
   redactEvents,
   redactMatch,
+  reportOptionsForLink,
 } from "../worker/api/share.ts";
+import { buildCoachReport, DEFAULT_REPORT_OPTIONS } from "../lib/tennis/report.ts";
 import { mergeEvents, shareTokenFromPath } from "../lib/tennis/live.ts";
 import { projectScore, scoreSummary } from "../lib/tennis/scoring.ts";
 
@@ -61,7 +63,8 @@ function fixtureMatch() {
 const link = (overrides = {}) => ({
   id: "link-1", token_hash: "hash", match_id: "match-1", kind: "live",
   created_at: new Date(0).toISOString(), expires_at: null, revoked_at: null,
-  include_mental_states: 0, opponent_display: "initials", include_timeline: 1, label: null,
+  include_mental_states: 0, opponent_display: "initials", include_timeline: 1,
+  report_options: null, label: null,
   ...overrides,
 });
 
@@ -152,4 +155,48 @@ test("a spectator deduplicates replayed events by id", () => {
   assert.equal(mergeEvents(existing, []), existing);
   assert.equal(mergeEvents(existing, [make("a"), make("b")]), existing);
   assert.deepEqual(mergeEvents(existing, [make("b"), make("c")]).map((event) => event.id), ["a", "b", "c"]);
+});
+
+test("a report link's own flags overrule whatever the stored report options ask for", () => {
+  // The stored options want everything; the link was created without any of it.
+  const greedy = JSON.stringify({
+    opponentIdentity: true, matchStats: true, shotAnalytics: true, timeline: true,
+    mentalStates: true, mentalNotes: true, recommendations: true,
+  });
+  const restricted = reportOptionsForLink(link({ kind: "report", report_options: greedy, opponent_display: "initials", include_mental_states: 0, include_timeline: 0 }));
+  assert.equal(restricted.opponentIdentity, false);
+  assert.equal(restricted.mentalStates, false);
+  assert.equal(restricted.mentalNotes, false);
+  assert.equal(restricted.timeline, false);
+  // Options that carry no privacy weight are left alone.
+  assert.equal(restricted.matchStats, true);
+  assert.equal(restricted.shotAnalytics, true);
+
+  const permissive = reportOptionsForLink(link({ kind: "report", report_options: greedy, opponent_display: "full", include_mental_states: 1, include_timeline: 1 }));
+  assert.equal(permissive.opponentIdentity, true);
+  assert.equal(permissive.mentalStates, true);
+  assert.equal(permissive.timeline, true);
+});
+
+test("a report link with unreadable or missing options falls back to the defaults", () => {
+  for (const stored of [null, "not json", "{"]) {
+    const options = reportOptionsForLink(link({ kind: "report", report_options: stored, opponent_display: "full", include_mental_states: 1, include_timeline: 1 }));
+    assert.deepEqual(options, DEFAULT_REPORT_OPTIONS, String(stored));
+  }
+});
+
+test("the hosted report and the download are built from the same redacted match", () => {
+  const restrictive = link({ kind: "report", opponent_display: "initials", include_mental_states: 0, include_timeline: 1 });
+  const html = buildCoachReport(redactMatch(fixtureMatch(), restrictive), reportOptionsForLink(restrictive));
+  assert.match(html, /noindex,nofollow/);
+  assert.doesNotMatch(html, /Vandermeer/);
+  assert.doesNotMatch(html, /shoulders dropped/);
+  assert.doesNotMatch(html, /private parent notes/);
+  assert.match(html, /mental-state observations withheld/);
+  // Shot analytics are part of the dataset a coach receives.
+  assert.match(html, /Shot analytics/);
+  assert.match(html, /Forehand impact/);
+  assert.match(html, /Net conversion/);
+  // Section 18 requires the sample behind every rate to be visible.
+  assert.match(html, /n=0|\d+\/\d+ \(\d+%\)/);
 });

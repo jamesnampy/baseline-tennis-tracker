@@ -10,7 +10,11 @@
  * point: mental-state observations are subjective notes about a child and are
  * withheld unless the person who recorded them explicitly includes them.
  */
-import type { MatchConfig, MatchEvent, MatchRecord } from "@/lib/tennis/model.ts";
+// Relative rather than the `@/` alias: this module's redaction rules are unit
+// tested under plain Node, which resolves no bundler aliases. A value import
+// through `@/` here would only fail once a test ran it.
+import type { MatchConfig, MatchEvent, MatchRecord } from "../../lib/tennis/model.ts";
+import { DEFAULT_REPORT_OPTIONS, type CoachReportOptions } from "../../lib/tennis/report.ts";
 /** Persisted share-link row. Defined here because redaction, not storage, owns its meaning. */
 export interface ShareLinkRow {
   id: string;
@@ -23,6 +27,8 @@ export interface ShareLinkRow {
   include_mental_states: number;
   opponent_display: string;
   include_timeline: number;
+  /** Serialized CoachReportOptions for `report` links. */
+  report_options: string | null;
   label: string | null;
 }
 
@@ -163,6 +169,34 @@ export function redactMatch(match: MatchRecord, link: ShareLinkRow): MatchRecord
   };
 }
 
+/**
+ * The report options a link may actually use.
+ *
+ * The stored options say what the report should contain; the link row says what
+ * the recipient is allowed to see. The link row wins on all three privacy-
+ * bearing fields, so a report link can never disclose the opponent's name,
+ * mental-state observations, or the point timeline when the link was created
+ * without them — whatever the stored options claim.
+ */
+export function reportOptionsForLink(link: ShareLinkRow): CoachReportOptions {
+  let stored: Partial<CoachReportOptions> = {};
+  if (link.report_options) {
+    try {
+      stored = JSON.parse(link.report_options) as Partial<CoachReportOptions>;
+    } catch {
+      stored = {};
+    }
+  }
+  const merged = { ...DEFAULT_REPORT_OPTIONS, ...stored };
+  return {
+    ...merged,
+    opponentIdentity: merged.opponentIdentity && link.opponent_display === "full",
+    mentalStates: merged.mentalStates && link.include_mental_states === 1,
+    mentalNotes: merged.mentalNotes && link.include_mental_states === 1,
+    timeline: merged.timeline && link.include_timeline === 1,
+  };
+}
+
 export function shareLinkSummary(link: ShareLinkRow) {
   return {
     id: link.id,
@@ -178,3 +212,4 @@ export function shareLinkSummary(link: ShareLinkRow) {
     label: link.label,
   };
 }
+
