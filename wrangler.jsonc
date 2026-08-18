@@ -21,6 +21,14 @@
   // then the binding resolves to nothing locally and every /api/v1 route answers
   // 503; tracking, export, and the strategy review are unaffected because the
   // device remains the authoritative store during a match.
+  // One Durable Object per match. It serializes appends so server sequence
+  // numbers never race, and fans new points out to live spectators over
+  // WebSockets. Removing this binding degrades cleanly: sync and the API keep
+  // working, only live updates stop.
+  "durable_objects": {
+    "bindings": [{ "name": "MATCH_ROOM", "class_name": "MatchRoom" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["MatchRoom"] }],
   "d1_databases": [
     {
       "binding": "DB",

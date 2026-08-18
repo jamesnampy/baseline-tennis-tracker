@@ -8,6 +8,8 @@
 import { API_PREFIX, handleApiRequest, type ApiEnv } from "./api/router.ts";
 import { handleStrategyRequest, type StrategyEnv } from "./strategy/index.ts";
 
+export { MatchRoom } from "./live/room.ts";
+
 export interface Env extends StrategyEnv, ApiEnv {
   ASSETS: Fetcher;
 }

@@ -9,6 +9,7 @@ import {
   redactEvents,
   redactMatch,
 } from "../worker/api/share.ts";
+import { mergeEvents, shareTokenFromPath } from "../lib/tennis/live.ts";
 import { projectScore, scoreSummary } from "../lib/tennis/scoring.ts";
 
 const blankScore = {
@@ -134,4 +135,21 @@ test("share tokens are unguessable and stored only as a hash", async () => {
   assert.match(hash, /^[0-9a-f]{64}$/);
   assert.equal(hash, await hashShareToken(token));
   assert.notEqual(hash, await hashShareToken(token + "x"));
+});
+
+test("only a well-formed share path routes to the spectator view", () => {
+  const token = "iWSeL9etoL1rfXRWq0V_zw6GuF-SqHkNm-X-eLvGRHE";
+  assert.equal(shareTokenFromPath(`/live/${token}`), token);
+  assert.equal(shareTokenFromPath(`/live/${token}/`), token);
+  for (const path of ["/", "/live", "/live/", "/live/short", "/live/a b", "/live/x/y", "/livest/abc", `/live/${token}?x=1`]) {
+    assert.equal(shareTokenFromPath(path), null, path);
+  }
+});
+
+test("a spectator deduplicates replayed events by id", () => {
+  const make = (id) => ({ id, matchId: "m", schemaVersion: 1, sequence: 1, timestamp: "t", source: "tracked", type: "point_completed", payload: {} });
+  const existing = [make("a"), make("b")];
+  assert.equal(mergeEvents(existing, []), existing);
+  assert.equal(mergeEvents(existing, [make("a"), make("b")]), existing);
+  assert.deepEqual(mergeEvents(existing, [make("b"), make("c")]).map((event) => event.id), ["a", "b", "c"]);
 });

@@ -21,6 +21,7 @@ The functional MVP is implemented. The finalized product definition and approved
 - Supports legal score synchronization after missed points and up to five consecutive point-level undos with no redo.
 - Exports a lossless event log and analysis-ready CSV content in one portable JSON bundle.
 - Offers an explicit, on-demand AI strategy review when a server API key is configured, with an evidence-based on-device fallback.
+- Optionally mirrors saved events to Cloudflare D1 and shares a revocable, redacted live link with another spectator.
 
 ## Offline behavior
 
@@ -83,6 +84,14 @@ Redaction happens in the Worker, before anything leaves it:
 
 Spectators replay the same `lib/tennis/` projections the tracker uses, so there is no second scoring engine to keep in step.
 
+## Live spectator view
+
+`/live/<token>` is a read-only page that follows a match as it is tracked: scoreboard, both-player statistics, and the point timeline, all projected from the redacted event stream.
+
+One Durable Object per match serializes appends and fans new points out over a WebSocket, so a spectator sees a point about as fast as the parent taps it. If the socket cannot be established the page falls back to polling `/api/v1/live/<token>/events` and stays a few seconds behind instead of failing. Each socket carries its own link's privacy settings, so two people watching the same match through differently-configured links see different things and neither can widen what they receive.
+
+Removing the Durable Object binding degrades cleanly: sync, the API, and share-link snapshots keep working, and only live push stops.
+
 ## Deployment
 
 The app is a client-side SPA served from Cloudflare Workers Assets, with an API Worker handling `/api/*`.
@@ -95,7 +104,7 @@ Set `VITE_PUBLIC_ORIGIN` at build time (for example `https://baseline.example.co
 
 ## Project structure
 
-- `index.html` / `src/` — mobile experience (SPA entry point and UI)
+- `index.html` / `src/` — mobile experience (SPA entry point, tracker UI, and the read-only spectator view)
 - `worker/` — Cloudflare Worker: the versioned analysis API, share-link redaction, and the pluggable strategy provider
 - `lib/tennis/` — scoring engine, event projections, analytics, storage, and export
 - `db/` — Drizzle schema for the D1 event store; `drizzle/` holds its generated migrations

@@ -37,6 +37,7 @@ import {
 import {
   appendEvents,
   eventFromRow,
+  type AppendResult,
   findShareLinkByHash,
   getMatchRow,
   insertShareLink,
@@ -58,6 +59,8 @@ export interface ApiEnv {
   DB?: D1Database;
   /** Shared bearer secret. Unset means hosted access stays off. */
   SYNC_TOKEN?: string;
+  /** One room per match: serializes appends and fans them out to spectators. */
+  MATCH_ROOM?: DurableObjectNamespace;
 }
 
 export const API_PREFIX = "/api/v1";
@@ -195,7 +198,7 @@ export async function handleApiRequest(request: Request, env: ApiEnv, url: URL):
 
   if (segments[0] === "sync" && segments.length === 1) {
     if (request.method !== "POST") return json({ error: "Method not allowed." }, 405);
-    return handleSync(request, db);
+    return handleSync(request, env, db);
   }
 
   if (segments[0] === "players" && segments.length === 1 && request.method === "GET") {
@@ -323,7 +326,7 @@ function resourceRecords(match: MatchRecord, resource: string): unknown[] {
     .map((event) => ({ ...event, stale: stale.has(event.id) }));
 }
 
-async function handleSync(request: Request, db: D1Database): Promise<Response> {
+async function handleSync(request: Request, env: ApiEnv, db: D1Database): Promise<Response> {
   const body = await readJson<SyncBody>(request);
   if (!body?.match?.id) return json({ error: "A match with an id is required." }, 400);
   const events = body.events ?? [];
@@ -337,8 +340,25 @@ async function handleSync(request: Request, db: D1Database): Promise<Response> {
   await upsertMatch(db, body.match);
   const players = await upsertPlayers(db, body.players ?? []);
   const mappings = await upsertIdentityMappings(db, body.identityMappings ?? []);
-  const appended = await appendEvents(db, body.match.id, events);
+  const appended = await appendThroughRoom(env, db, body.match.id, events);
   return json({ matchId: body.match.id, players, identityMappings: mappings, ...appended });
+}
+
+/**
+ * Appends through the match's Durable Object when one is bound, so writes are
+ * serialized and spectators see the point immediately. A deployment without the
+ * binding writes straight to D1 and simply has no live fanout — sync, the API,
+ * and share-link snapshots all keep working.
+ */
+async function appendThroughRoom(env: ApiEnv, db: D1Database, matchId: string, events: MatchEvent[]) {
+  if (!env.MATCH_ROOM) return appendEvents(db, matchId, events);
+  const room = env.MATCH_ROOM.get(env.MATCH_ROOM.idFromName(matchId));
+  const response = await room.fetch("https://match-room/append", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ matchId, events }),
+  });
+  return (await response.json()) as AppendResult;
 }
 
 async function handleCreateShareLink(request: Request, db: D1Database, matchId: string, url: URL): Promise<Response> {
@@ -388,6 +408,7 @@ async function handleLiveRequest(request: Request, env: ApiEnv, segments: string
   if (!token) return notFound();
   if (request.method !== "GET") return json({ error: "Method not allowed." }, 405);
 
+
   const link = await findShareLinkByHash(db, await hashShareToken(token));
   // A revoked, expired, or unknown token is answered identically, so a probe
   // cannot tell "wrong token" from "link you no longer have access to".
@@ -397,6 +418,20 @@ async function handleLiveRequest(request: Request, env: ApiEnv, segments: string
   if (!match) return json({ error: "This link is no longer available." }, 404);
   const visible = redactMatch(match, link);
   const score = projectScore(visible.events, visible.config);
+
+  if (segments.length === 3 && segments[2] === "socket") {
+    if (!env.MATCH_ROOM) return json({ error: "Live updates are not enabled for this deployment." }, 503);
+    if (request.headers.get("upgrade") !== "websocket") return json({ error: "Expected a WebSocket upgrade." }, 426);
+    const room = env.MATCH_ROOM.get(env.MATCH_ROOM.idFromName(link.match_id));
+    // The privacy settings travel from the validated link row, never from the
+    // client, so a spectator cannot ask for more than the link grants.
+    const target = new URL("https://match-room/socket");
+    target.searchParams.set("linkId", link.id);
+    target.searchParams.set("mental", String(link.include_mental_states));
+    target.searchParams.set("timeline", String(link.include_timeline));
+    target.searchParams.set("opponent", link.opponent_display);
+    return room.fetch(target, request);
+  }
 
   if (segments.length === 3 && segments[2] === "events") {
     const sinceSeq = Number(url.searchParams.get("sinceSeq") ?? 0) || 0;
