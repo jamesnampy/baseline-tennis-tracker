@@ -1,0 +1,24 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["esnext"],
+    "allowImportingTsExtensions": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "types": ["@cloudflare/workers-types"],
+    "composite": true,
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.worker.tsbuildinfo",
+    "paths": {
+      "@/*": ["./*"]
+    }
+  },
+  // `db/` is intentionally excluded until a D1 binding exists in wrangler.jsonc;
+  // it is unused scaffolding for the cloud-sync phase and cannot typecheck yet.
+  "include": ["worker/**/*.ts"]
+}

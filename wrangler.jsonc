@@ -1,0 +1,17 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "baseline-tennis-tracker",
+  "main": "./worker/index.ts",
+  "compatibility_date": "2025-11-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+  "assets": {
+    "directory": "./dist/client",
+    "binding": "ASSETS",
+    // The tracker is a client-side SPA: unknown paths must return index.html
+    // rather than a 404, so deep links and the installed PWA both resolve.
+    "not_found_handling": "single-page-application",
+    // Everything except the API is served straight from assets.
+    "run_worker_first": ["/api/*"]
+  }
+}

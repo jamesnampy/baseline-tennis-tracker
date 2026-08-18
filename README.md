@@ -22,9 +22,11 @@ The functional MVP is implemented. The finalized product definition and approved
 - Exports a lossless event log and analysis-ready CSV content in one portable JSON bundle.
 - Offers an explicit, on-demand AI strategy review when a server API key is configured, with an evidence-based on-device fallback.
 
-## Privacy and offline behavior
+## Offline behavior
 
-Match data remains on the device by default. Scoring, tracking, statistics, timeline, undo, recovery, and export do not require a network connection. Data is sent for strategy analysis only after the user taps **Ask AI for strategy**. Hosted model requests use `store: false`; no API key is exposed to the browser.
+Baseline is offline-first for **resilience**, not isolation: courts frequently have no usable cellular service, and tracking must never be interrupted by a dropped connection. Every action is written to IndexedDB immediately, and scoring, tracking, statistics, timeline, undo, recovery, and export all work with no network at all.
+
+Data is sent for strategy analysis only after the user taps **Ask AI for strategy**. No API key is exposed to the browser.
 
 Observed mental states are subjective courtside observations, not diagnoses.
 
@@ -46,12 +48,26 @@ npm run build
 
 ## Optional hosted strategy review
 
-Copy `.env.example` to `.env.local`, add a server-side `OPENAI_API_KEY`, and optionally change `OPENAI_STRATEGY_MODEL`. Without a key, the app transparently returns its on-device evidence review.
+Copy `.env.example` to `.env`, add a server-side `ANTHROPIC_API_KEY`, and optionally set `STRATEGY_MODEL` (default `claude-opus-4-8`). Without a key, the app transparently returns its on-device evidence review.
+
+The analysis layer is vendor-neutral per the MVP requirements: `worker/strategy/types.ts` defines the provider interface, and adding a vendor means implementing it and registering it in `resolveProvider`. Nothing above that seam knows which model answered.
+
+## Deployment
+
+The app is a client-side SPA served from Cloudflare Workers Assets, with an API Worker handling `/api/*`.
+
+```bash
+npm run deploy
+```
+
+Set `VITE_PUBLIC_ORIGIN` at build time (for example `https://baseline.example.com`) so social-preview images resolve to absolute URLs.
 
 ## Project structure
 
-- `app/` — mobile experience and server-side strategy endpoint
+- `index.html` / `src/` — mobile experience (SPA entry point and UI)
+- `worker/` — Cloudflare Worker API and the pluggable strategy provider
 - `lib/tennis/` — scoring engine, event projections, analytics, storage, and export
+- `db/` — Drizzle scaffolding for the planned D1 event store (not yet wired up)
 - `public/` — PWA manifest and offline service worker
 - `tests/` — automated scoring-format and edge-case coverage
 - `baseline-mvp-requirements.md` — canonical functional requirements

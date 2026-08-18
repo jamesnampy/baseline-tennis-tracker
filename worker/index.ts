@@ -1,47 +1,28 @@
-/** Cloudflare Worker entry point for the vinext-starter template. */
-import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } from "vinext/server/image-optimization";
-import handler from "vinext/server/app-router-entry";
+/**
+ * Cloudflare Worker API for Baseline.
+ *
+ * Static assets and the SPA fallback are served by the `assets` binding
+ * (see wrangler.jsonc). `run_worker_first` routes only `/api/*` here, so this
+ * handler never needs to serve the client bundle itself.
+ */
+import { handleStrategyRequest, type StrategyEnv } from "./strategy/index.ts";
 
-interface Env {
+export interface Env extends StrategyEnv {
   ASSETS: Fetcher;
-  DB: D1Database;
-  IMAGES: {
-    input(stream: ReadableStream): {
-      transform(options: Record<string, unknown>): {
-        output(options: { format: string; quality: number }): Promise<{ response(): Response }>;
-      };
-    };
-  };
 }
 
-interface ExecutionContext {
-  waitUntil(promise: Promise<unknown>): void;
-  passThroughOnException(): void;
-}
-
-// Image security config. SVG sources with .svg extension auto-skip the
-// optimization endpoint on the client side (served directly, no proxy).
-// To route SVGs through the optimizer (with security headers), set
-// dangerouslyAllowSVG: true in next.config.js and uncomment below:
-// const imageConfig: ImageConfig = { dangerouslyAllowSVG: true };
-
-const worker = {
-  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
 
-    if (url.pathname === "/_vinext/image") {
-      const allowedWidths = [...DEFAULT_DEVICE_SIZES, ...DEFAULT_IMAGE_SIZES];
-      return handleImageOptimization(request, {
-        fetchAsset: (path) => env.ASSETS.fetch(new Request(new URL(path, request.url))),
-        transformImage: async (body, { width, format, quality }) => {
-          const result = await env.IMAGES.input(body).transform(width > 0 ? { width } : {}).output({ format, quality });
-          return result.response();
-        },
-      }, allowedWidths);
+    if (url.pathname === "/api/strategy") {
+      return handleStrategyRequest(request, env);
     }
 
-    return handler.fetch(request, env, ctx);
-  },
-};
+    if (url.pathname.startsWith("/api/")) {
+      return Response.json({ error: "Not found." }, { status: 404 });
+    }
 
-export default worker;
+    return env.ASSETS.fetch(request);
+  },
+} satisfies ExportedHandler<Env>;
