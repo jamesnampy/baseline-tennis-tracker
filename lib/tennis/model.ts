@@ -315,7 +315,11 @@ export function isErrorOutcome(outcome?: PointOutcome): boolean {
 }
 
 export function usesAdvancedShotOptions(outcome?: PointOutcome): boolean {
-  return outcome === "winner" || outcome === "forced_error";
+  return outcome === "return_winner" || outcome === "return_error" || outcome === "winner" || outcome === "forced_error" || outcome === "unforced_error";
+}
+
+export function usesBallLandingOptions(outcome?: PointOutcome): boolean {
+  return outcome === "return_error" || outcome === "unforced_error";
 }
 
 export function pointDetailsPlayer(point: PointCompletedEvent, outcome: PointOutcome): PlayerKey {
@@ -331,7 +335,7 @@ export function hasCompleteShotDetails(details: PointDetails): boolean {
     details.finalStroke &&
     details.shotType &&
     advancedComplete &&
-    (!isErrorOutcome(details.outcome) || details.ballLanding),
+    (!usesBallLandingOptions(details.outcome) || details.ballLanding),
   );
 }
 

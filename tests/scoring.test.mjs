@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { applyPoint, initialScore, numberedPointEvents, pointScoreLabel } from "../lib/tennis/scoring.ts";
-import { eligiblePointOutcomes, hasCompleteShotDetails, isErrorOutcome, isPointOutcomeValid, pointDetailsPlayer, usesAdvancedShotOptions } from "../lib/tennis/model.ts";
+import { eligiblePointOutcomes, hasCompleteShotDetails, isErrorOutcome, isPointOutcomeValid, pointDetailsPlayer, usesAdvancedShotOptions, usesBallLandingOptions } from "../lib/tennis/model.ts";
 import { buildStats, filterEventsForStatsScope, pointStatsScope } from "../lib/tennis/analytics.ts";
 import { buildPressureAnalytics } from "../lib/tennis/pressure.ts";
 import { createPlayerProfile, linkPlayerIdentity, playerProfileAnalytics, versionPlayerProfile } from "../lib/tennis/profiles.ts";
@@ -37,9 +37,11 @@ test("optional tray offers only the return outcome consistent with the point win
   assert.equal(isPointOutcomeValid(serverWon, "return_winner"), false);
 });
 
-test("ball landing is collected only for error endings", () => {
+test("ball landing appears only for return and unforced errors", () => {
   for (const outcome of ["return_error", "forced_error", "unforced_error"]) assert.equal(isErrorOutcome(outcome), true);
   for (const outcome of ["return_winner", "winner", "ace", "double_fault"]) assert.equal(isErrorOutcome(outcome), false);
+  assert.equal(usesBallLandingOptions("return_error"),true); assert.equal(usesBallLandingOptions("unforced_error"),true);
+  for (const outcome of ["return_winner","winner","forced_error","ace","double_fault"]) assert.equal(usesBallLandingOptions(outcome),false);
 });
 
 test("advanced tray requires one selection from each advanced row before auto-advance", () => {
@@ -48,10 +50,11 @@ test("advanced tray requires one selection from each advanced row before auto-ad
   assert.equal(hasCompleteShotDetails({ ...base, advancedShotType:"cross_court" }), false);
   assert.equal(hasCompleteShotDetails({ ...base, shotSituation:"approach_shot",advancedShotType:"cross_court" }), true);
   assert.equal(hasCompleteShotDetails({ ...base,outcome:"unforced_error" }), false);
-  assert.equal(hasCompleteShotDetails({ ...base,outcome:"unforced_error",ballLanding:"long" }), true);
+  assert.equal(hasCompleteShotDetails({ ...base,outcome:"unforced_error",ballLanding:"long" }), false);
+  assert.equal(hasCompleteShotDetails({ ...base,outcome:"unforced_error",ballLanding:"long",shotSituation:"passing_shot",advancedShotType:"inside_out" }), true);
   assert.equal(hasCompleteShotDetails({ ...base,outcome:"forced_error",ballLanding:"side",shotSituation:"approach_shot" }), false);
-  assert.equal(hasCompleteShotDetails({ ...base,outcome:"forced_error",ballLanding:"side",shotSituation:"approach_shot",advancedShotType:"inside_in" }), true);
-  assert.equal(usesAdvancedShotOptions("winner"),true); assert.equal(usesAdvancedShotOptions("forced_error"),true); assert.equal(usesAdvancedShotOptions("return_winner"),false); assert.equal(usesAdvancedShotOptions("unforced_error"),false);
+  assert.equal(hasCompleteShotDetails({ ...base,outcome:"forced_error",shotSituation:"approach_shot",advancedShotType:"inside_in" }), true);
+  for (const outcome of ["return_winner","return_error","winner","forced_error","unforced_error"]) assert.equal(usesAdvancedShotOptions(outcome),true);
 });
 
 test("winner and forced-error shot details belong to the point winner", () => {

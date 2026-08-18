@@ -6,8 +6,8 @@ import { buildStats, filterEventsForStatsScope, percentage, pointStatsScope, str
 import { buildExportBundle, downloadExport, zipFiles } from "@/lib/tennis/export";
 import {
   AdvancedShotType, BallLanding, deepCloneScore, eligiblePointOutcomes, FinalStroke, FORMAT_RULES, hasCompleteShotDetails, MatchConfig,
-  IdentityMapping, isErrorOutcome, MatchEvent, MatchRecord, MentalState, otherPlayer, PlayerKey, PlayerProfile, PointDetails,
-  pointDetailsPlayer, PointOutcome, RallyRange, ScoreState, ShotSituation, ShotType, usesAdvancedShotOptions,
+  IdentityMapping, MatchEvent, MatchRecord, MentalState, otherPlayer, PlayerKey, PlayerProfile, PointDetails,
+  pointDetailsPlayer, PointOutcome, RallyRange, ScoreState, ShotSituation, ShotType, usesAdvancedShotOptions, usesBallLandingOptions,
 } from "@/lib/tennis/model";
 import { createPlayerProfile, linkPlayerIdentity, playerProfileAnalytics, versionPlayerProfile } from "@/lib/tennis/profiles";
 import { buildPressureAnalytics } from "@/lib/tennis/pressure";
@@ -216,7 +216,7 @@ function WinnerStage({ config, onWinner }: { config: MatchConfig; onWinner: (pla
 function OutcomeStage({ allowedOutcomes, onOutcome, onSkip }: { allowedOutcomes: PointOutcome[]; onOutcome: (outcome: PointOutcome) => void; onSkip: () => void }) { const returnOutcome = (["return_winner", "return_error"] as PointOutcome[]).find((outcome) => allowedOutcomes.includes(outcome)); const outcomes = [returnOutcome, "winner", "forced_error", "unforced_error"].filter(Boolean) as PointOutcome[]; return <><div className="point-prompt compact"><p className="eyebrow">POINT SAVED</p><h1>How did the point end?</h1><p>Optional—choose one, or keep moving.</p></div><div className="outcome-grid">{outcomes.map((outcome) => <button className="outcome" key={outcome} onClick={() => onOutcome(outcome)}>{outcomeLabels[outcome]}</button>)}</div><button className="skip-button" onClick={onSkip}>Skip details <span>→</span></button></>; }
 function DetailsTray({ details, setDetails, onContinue }: { details: PointDetails; setDetails: (details: PointDetails) => void; onContinue: () => void }) {
   const section = <T extends string>(title: string, key: keyof PointDetails, values: T[], labels?: Record<string, string>, className = "") => <div className={`detail-section ${className}`}><p>{title}</p><div>{values.map((value) => <button key={value} className={details[key] === value ? "selected" : ""} onClick={() => setDetails({ ...details, [key]: value })}>{labels?.[value] ?? value}</button>)}</div></div>;
-  const showBallLanding = isErrorOutcome(details.outcome);
+  const showBallLanding = usesBallLandingOptions(details.outcome);
   const showAdvanced = usesAdvancedShotOptions(details.outcome);
   return <><div className="point-prompt compact"><p className="eyebrow">{details.outcome ? outcomeLabels[details.outcome] : "POINT DETAILS"}</p><h1>Add shot details</h1><p>Everything below is optional.</p></div><div className="details-tray">{section<RallyRange>("Rally length", "rallyRange", ["1-5", "6-10", "11-20", "21+"])}{section<FinalStroke>("Final stroke", "finalStroke", ["forehand", "backhand", "neither"], shotLabels, "single-line")}{showBallLanding && section<BallLanding>("Ball landed", "ballLanding", ["net", "long", "side"], shotLabels, "single-line")}{section<ShotType>("Shot type", "shotType", ["groundstroke", "slice", "volley", "drop_shot", "lob", "overhead"], shotLabels, "three-column")}{showAdvanced && section<ShotSituation>("Advanced shot · Row 1", "shotSituation", ["approach_shot", "passing_shot"], shotLabels, "two-column")}{showAdvanced && section<AdvancedShotType>("Advanced shot · Row 2", "advancedShotType", ["cross_court", "inside_out", "inside_in"], shotLabels, "single-line")}<button className="continue-button" onClick={onContinue}>Continue to next point <span>→</span></button></div></>;
 }
