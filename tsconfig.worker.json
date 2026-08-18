@@ -22,6 +22,6 @@
   // client uses, so spectators and the API never see a second scoring engine.
   // `db/` stays out: it is the Drizzle migration source, not Worker runtime code.
   "include": ["worker/**/*.ts", "lib/**/*.ts"],
-  // IndexedDB is the device's store and has no meaning in a Worker.
-  "exclude": ["lib/tennis/storage.ts"]
+  // IndexedDB and the client outbox are device concerns with no meaning in a Worker.
+  "exclude": ["lib/tennis/storage.ts", "lib/tennis/sync.ts"]
 }

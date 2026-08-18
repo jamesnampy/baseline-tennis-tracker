@@ -4,7 +4,8 @@ const DB_NAME = "baseline-tennis-tracker";
 const STORE_NAME = "matches";
 const PLAYER_STORE = "players";
 const MAPPING_STORE = "identity_mappings";
-const DB_VERSION = 2;
+const SYNC_STORE = "sync_state";
+const DB_VERSION = 3;
 
 function openDatabase(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -16,6 +17,7 @@ function openDatabase(): Promise<IDBDatabase> {
       }
       if (!db.objectStoreNames.contains(PLAYER_STORE)) db.createObjectStore(PLAYER_STORE, { keyPath: "id" });
       if (!db.objectStoreNames.contains(MAPPING_STORE)) db.createObjectStore(MAPPING_STORE, { keyPath: "id" });
+      if (!db.objectStoreNames.contains(SYNC_STORE)) db.createObjectStore(SYNC_STORE, { keyPath: "matchId" });
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
@@ -32,6 +34,35 @@ async function getAll<T>(storeName: string): Promise<T[]> {
   const db = await openDatabase();
   const rows = await new Promise<T[]>((resolve, reject) => { const request = db.transaction(storeName, "readonly").objectStore(storeName).getAll(); request.onsuccess = () => resolve(request.result as T[]); request.onerror = () => reject(request.error); });
   db.close(); return rows;
+}
+
+/**
+ * How far each match has been pushed to the hosted store.
+ *
+ * `syncedCount` is a cursor into the local event array, which is append-only:
+ * undo appends a voiding event rather than removing one, so a count never goes
+ * stale in a way that loses data. A cursor that is behind simply re-pushes
+ * events the server already has, and the server ignores them by event id.
+ */
+export interface MatchSyncState {
+  matchId: string;
+  syncedCount: number;
+  lastSyncedAt?: string;
+  lastError?: string;
+}
+
+export const saveSyncState = (state: MatchSyncState) => put(SYNC_STORE, state);
+export const loadSyncStates = () => getAll<MatchSyncState>(SYNC_STORE);
+
+export async function loadSyncState(matchId: string): Promise<MatchSyncState | undefined> {
+  const db = await openDatabase();
+  const state = await new Promise<MatchSyncState | undefined>((resolve, reject) => {
+    const request = db.transaction(SYNC_STORE, "readonly").objectStore(SYNC_STORE).get(matchId);
+    request.onsuccess = () => resolve(request.result as MatchSyncState | undefined);
+    request.onerror = () => reject(request.error);
+  });
+  db.close();
+  return state;
 }
 
 export const savePlayer = (player: PlayerProfile) => put(PLAYER_STORE, player);

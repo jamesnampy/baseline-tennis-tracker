@@ -1,6 +1,6 @@
 /* eslint-disable jsx-a11y/label-has-associated-control */
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { buildStats, filterEventsForStatsScope, percentage, pointStatsScope, strategyReview, type StatsScope } from "@/lib/tennis/analytics";
 import { buildExportBundle, downloadExport, zipFiles } from "@/lib/tennis/export";
 import {
@@ -15,7 +15,11 @@ import {
   activePointEvents, applyPoint, derivedCompletions, initialScore, numberedPointEvents, pointDetailsMap, pointGameNumber,
   pointScoreLabel, pointSetNumber, projectScore, scoreSummary, voidedPointIds,
 } from "@/lib/tennis/scoring";
-import { deleteMatch, loadIdentityMappings, loadMatches, loadPlayers, saveIdentityMapping, saveMatch, savePlayer } from "@/lib/tennis/storage";
+import { deleteMatch, loadIdentityMappings, loadMatches, loadPlayers, loadSyncStates, saveIdentityMapping, saveMatch, savePlayer, type MatchSyncState } from "@/lib/tennis/storage";
+import {
+  createShareLink, flushOutbox, listShareLinks, loadSyncSettings, pendingEventCount,
+  pushMatch, revokeShareLink, saveSyncSettings, type ShareLinkResponse, type SyncSettings,
+} from "@/lib/tennis/sync";
 
 type Tab = "track" | "stats" | "timeline" | "match";
 type TrackStage = "serve" | "winner" | "outcome" | "details";
@@ -62,19 +66,35 @@ export default function Home() {
   const [loaded, setLoaded] = useState(false);
   const [saved, setSaved] = useState(true);
   const [homeView, setHomeView] = useState<"matches" | "profiles" | "export" | "reports">("matches");
+  // Read by the sync effects without widening their dependencies: adding a
+  // profile must not re-trigger a match save.
+  const syncInputs = useRef({ matches, players, mappings });
+  useEffect(() => { syncInputs.current = { matches, players, mappings }; }, [matches, players, mappings]);
 
   useEffect(() => {
-    Promise.all([loadMatches(), loadPlayers(), loadIdentityMappings()]).then(([records, savedPlayers, savedMappings]) => { setMatches(records); setPlayers(savedPlayers); setMappings(savedMappings); setLoaded(true); }).catch(() => setLoaded(true));
+    Promise.all([loadMatches(), loadPlayers(), loadIdentityMappings()]).then(([records, savedPlayers, savedMappings]) => {
+      setMatches(records); setPlayers(savedPlayers); setMappings(savedMappings); setLoaded(true);
+      // Anything queued while the last session was offline goes out now. Sync is
+      // opt-in and this is a no-op until the user turns it on.
+      flushOutbox(records, savedPlayers, savedMappings).catch(() => undefined);
+    }).catch(() => setLoaded(true));
     if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => undefined);
   }, []);
   useEffect(() => {
     if (!match) return;
     const timer = window.setTimeout(() => {
       setSaved(false);
-      saveMatch(match).then(() => { setSaved(true); setMatches((existing) => [match, ...existing.filter((item) => item.id !== match.id)]); });
+      // IndexedDB first, always. The cloud push happens after the local write has
+      // succeeded and can never delay or reorder it.
+      saveMatch(match).then(() => { setSaved(true); setMatches((existing) => [match, ...existing.filter((item) => item.id !== match.id)]); return pushMatch(match, syncInputs.current.players, syncInputs.current.mappings); }).catch(() => undefined);
     }, 80);
     return () => window.clearTimeout(timer);
   }, [match]);
+  useEffect(() => {
+    const flush = () => { const current = syncInputs.current; flushOutbox(current.matches, current.players, current.mappings).catch(() => undefined); };
+    window.addEventListener("online", flush);
+    return () => window.removeEventListener("online", flush);
+  }, []);
 
   function startMatch() {
     if (!config.myPlayerName.trim() || !config.opponentName.trim()) return;
@@ -130,9 +150,83 @@ function DataHub({ view, setView, players, matches, mappings, onMap }: { view: "
   const saveBlob=(name:string,blob:Blob)=>{const url=URL.createObjectURL(blob);const link=document.createElement("a");link.href=url;link.download=name;link.click();setTimeout(()=>URL.revokeObjectURL(url),1000)};
   return <main className="app-shell data-screen"><header className="simple-header"><button onClick={()=>setView("matches")}>‹</button><div><p className="eyebrow">BASELINE DATA</p><strong>{view === "profiles" ? "Player profiles" : view === "export" ? "Analysis export" : "Coach reports"}</strong></div><span /></header><div className="data-scroll">
     {view==="profiles"&&<><section className="data-intro"><h1>Player profiles</h1><p>Stable identities connect authorized matches without rewriting history.</p></section>{players.length?<><label className="data-select">Player<select value={selectedPlayer?.id} onChange={(e)=>setPlayerId(e.target.value)}>{players.map((p)=><option value={p.id} key={p.id}>{p.displayName}</option>)}</select></label>{profileStats&&<div className="profile-metrics"><span><b>{profileStats.matchCount}</b><small>matches</small></span><span><b>{profileStats.trackedPoints}</b><small>tracked points</small></span><span><b>{profileStats.coverage}%</b><small>coverage</small></span><span><b>{profileStats.pointsWon}</b><small>points won</small></span></div>}<section className="data-card"><h2>Auditable identity link</h2><select value={fromId} onChange={(e)=>setFromId(e.target.value)}><option value="">Choose guest or duplicate</option>{players.filter((p)=>p.id!==selectedPlayer?.id).map((p)=><option value={p.id} key={p.id}>{p.displayName}</option>)}</select><button disabled={!fromId||!selectedPlayer} onClick={()=>{if(selectedPlayer){onMap(linkPlayerIdentity(fromId,selectedPlayer.id));setFromId("")}}}>Link to {selectedPlayer?.displayName}</button><p>Creates a mapping record; original match and event IDs remain unchanged.</p></section><section className="data-card"><h2>Pressure samples across selected match</h2>{pressure&&(["my","opponent"] as PlayerKey[]).map((key)=><p key={key}><strong>{playerName(selectedMatch.config,key)}</strong> · {pressure[key].won}/{pressure[key].played} won · coverage {pressure[key].trackedPoints}/{pressure[key].estimatedPoints} ({pressure[key].coverage}%)</p>)}</section></>:<div className="empty-card">Create profiles from New Match setup.</div>}</>}
-    {view==="export"&&<><section className="data-intro"><h1>Codex / Claude export</h1><p>One ZIP containing portable CSV tables, lossless events, schema, manifest, API contract, and a coach report.</p></section><label className="data-select">Scope<select value={matchId} onChange={(e)=>setMatchId(e.target.value)}><option value="">All authorized matches</option>{matches.map((m)=><option value={m.id} key={m.id}>{m.config.myPlayerName} vs. {m.config.opponentName}</option>)}</select></label><label className="check-row"><input type="checkbox" checked={anonymize} onChange={(e)=>setAnonymize(e.target.checked)}/>Anonymize names and private profile fields</label><div className="file-grid">{["matches.csv","players.csv","identity_mappings.csv","points.csv","serves.csv","shots.csv","mental_states.csv","score_syncs.csv","events.json","schema.json","manifest.json","match-report.html"].map((name)=><span key={name}>✓ {name}</span>)}</div><button className="primary-button" disabled={!matches.length} onClick={()=>{const scope=matchId&&selectedMatch?[selectedMatch]:matches.filter((m)=>m.authorized!==false);const bundle=buildExportBundle(scope,players,mappings,anonymize,selectedMatch?{match:selectedMatch,options}:undefined);saveBlob("baseline-analysis.zip",zipFiles(bundle.files))}}>Download complete ZIP</button></>}
-    {view==="reports"&&<><section className="data-intro"><h1>Coach report</h1><p>Create a private, self-contained HTML snapshot. Free-form notes stay excluded unless selected.</p></section><label className="data-select">Match<select value={matchId} onChange={(e)=>setMatchId(e.target.value)}>{matches.map((m)=><option value={m.id} key={m.id}>{m.config.myPlayerName} vs. {m.config.opponentName}</option>)}</select></label><section className="data-card report-options">{Object.entries({opponentIdentity:"Opponent identity",matchStats:"Match stats",timeline:"Timelines",mentalStates:"Mental-state progression",mentalNotes:"Mental-state notes",recommendations:"Coaching recommendations"}).map(([key,label])=><label key={key}><input type="checkbox" checked={options[key as keyof CoachReportOptions]} onChange={(e)=>setOptions((current)=>({...current,[key]:e.target.checked}))}/>{label}</label>)}</section><button className="primary-button" disabled={!selectedMatch} onClick={()=>selectedMatch&&saveBlob("baseline-coach-report.html",new Blob([buildCoachReport(selectedMatch,options)],{type:"text/html"}))}>Download self-contained HTML</button></>}
+    {view==="export"&&<><section className="data-intro"><h1>Codex / Claude export</h1><p>One ZIP containing portable CSV tables, lossless events, schema, manifest, API contract, and a coach report.</p></section><label className="data-select">Scope<select value={matchId} onChange={(e)=>setMatchId(e.target.value)}><option value="">All authorized matches</option>{matches.map((m)=><option value={m.id} key={m.id}>{m.config.myPlayerName} vs. {m.config.opponentName}</option>)}</select></label><label className="check-row"><input type="checkbox" checked={anonymize} onChange={(e)=>setAnonymize(e.target.checked)}/>Anonymize names and private profile fields</label><div className="file-grid">{["matches.csv","players.csv","identity_mappings.csv","points.csv","serves.csv","shots.csv","mental_states.csv","score_syncs.csv","events.json","schema.json","manifest.json","match-report.html"].map((name)=><span key={name}>✓ {name}</span>)}</div><button className="primary-button" disabled={!matches.length} onClick={()=>{const scope=matchId&&selectedMatch?[selectedMatch]:matches.filter((m)=>m.authorized!==false);const bundle=buildExportBundle(scope,players,mappings,anonymize,selectedMatch?{match:selectedMatch,options}:undefined);saveBlob("baseline-analysis.zip",zipFiles(bundle.files))}}>Download complete ZIP</button><CloudSyncCard matches={matches} players={players} mappings={mappings} /></>}
+    {view==="reports"&&<><section className="data-intro"><h1>Coach report</h1><p>Create a private, self-contained HTML snapshot. Free-form notes stay excluded unless selected.</p></section><label className="data-select">Match<select value={matchId} onChange={(e)=>setMatchId(e.target.value)}>{matches.map((m)=><option value={m.id} key={m.id}>{m.config.myPlayerName} vs. {m.config.opponentName}</option>)}</select></label><section className="data-card report-options">{Object.entries({opponentIdentity:"Opponent identity",matchStats:"Match stats",timeline:"Timelines",mentalStates:"Mental-state progression",mentalNotes:"Mental-state notes",recommendations:"Coaching recommendations"}).map(([key,label])=><label key={key}><input type="checkbox" checked={options[key as keyof CoachReportOptions]} onChange={(e)=>setOptions((current)=>({...current,[key]:e.target.checked}))}/>{label}</label>)}</section><button className="primary-button" disabled={!selectedMatch} onClick={()=>selectedMatch&&saveBlob("baseline-coach-report.html",new Blob([buildCoachReport(selectedMatch,options)],{type:"text/html"}))}>Download self-contained HTML</button>{selectedMatch&&<ShareLinkCard match={selectedMatch} />}</>}
   </div><HomeNav view={view} setView={setView}/></main>;
+}
+
+/**
+ * Cloud sync is opt-in, and this is where the user opts in. It lives on the data
+ * screen rather than the tracking screen on purpose: the courtside surface is
+ * for scoring, and nothing here should ever compete with the next point.
+ */
+function CloudSyncCard({ matches, players, mappings }: { matches: MatchRecord[]; players: PlayerProfile[]; mappings: IdentityMapping[] }) {
+  // Settings live in localStorage, which reads synchronously, so they are the
+  // initial state rather than something an effect fills in one render later.
+  const [settings, setSettings] = useState<SyncSettings>(loadSyncSettings);
+  const [states, setStates] = useState<MatchSyncState[]>([]);
+  const [status, setStatus] = useState("");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { loadSyncStates().then(setStates).catch(() => undefined); }, []);
+  const stateFor = (id: string) => states.find((state) => state.matchId === id);
+  const pending = matches.reduce((total, item) => total + pendingEventCount(item, stateFor(item.id)), 0);
+  const lastSyncedAt = states.map((state) => state.lastSyncedAt).filter(Boolean).sort().at(-1);
+  const lastError = states.map((state) => state.lastError).filter(Boolean).at(-1);
+  function persist(next: SyncSettings) { const saved = saveSyncSettings(next); setSettings(saved); setStatus(saved.enabled ? "Cloud sync is on." : "Cloud sync is off. Matches stay on this device."); }
+  async function syncNow() {
+    setBusy(true); setStatus("Pushing queued events…");
+    const reports = await flushOutbox(matches, players, mappings);
+    const pushed = reports.reduce((total, report) => total + report.pushed, 0);
+    const failure = reports.find((report) => report.outcome === "failed");
+    setStates(await loadSyncStates());
+    setStatus(failure?.error ?? (reports.some((report) => report.outcome === "offline") ? "Offline. Events stay queued." : `Synced ${pushed} event${pushed === 1 ? "" : "s"}.`));
+    setBusy(false);
+  }
+  return <section className="data-card"><h2>Cloud sync</h2><p>Off by default. When on, saved events are copied to your Cloudflare deployment after they are written to this device&mdash;never before. Tracking, undo, stats, and export keep working with no connection at all.</p>
+    <label className="check-row"><input type="checkbox" checked={settings.enabled} onChange={(event) => persist({ ...settings, enabled: event.target.checked })} />Enable cloud sync for this device</label>
+    <label>Access token<input type="password" value={settings.token} onChange={(event) => setSettings({ ...settings, token: event.target.value })} onBlur={() => persist(settings)} placeholder="SYNC_TOKEN" autoComplete="off" /></label>
+    <label>Endpoint (optional)<input value={settings.endpoint} onChange={(event) => setSettings({ ...settings, endpoint: event.target.value })} onBlur={() => persist(settings)} placeholder="Same origin" /></label>
+    <p>{pending} event{pending === 1 ? "" : "s"} queued{lastSyncedAt ? ` · last synced ${new Date(lastSyncedAt).toLocaleString()}` : " · never synced"}</p>
+    {lastError && <p className="validation-error">{lastError}</p>}
+    <button disabled={busy || !settings.enabled || !matches.length} onClick={syncNow}>{busy ? "Syncing…" : "Sync now"}</button>
+    {status && <p>{status}</p>}
+  </section>;
+}
+
+/**
+ * Live and report links (requirements sections 18 and 19). Every privacy choice
+ * here is enforced in the Worker, not in the page the recipient loads, so a link
+ * cannot be made to reveal more than it was created with.
+ */
+function ShareLinkCard({ match }: { match: MatchRecord }) {
+  const [links, setLinks] = useState<{ id: string; active: boolean; expiresAt: string | null; opponentDisplay: string; createdAt: string }[]>([]);
+  const [created, setCreated] = useState<ShareLinkResponse>();
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [opponentDisplay, setOpponentDisplay] = useState<"full" | "initials" | "hidden">("initials");
+  const [includeMentalStates, setIncludeMentalStates] = useState(false);
+  const [includeTimeline, setIncludeTimeline] = useState(true);
+  const [expiresInHours, setExpiresInHours] = useState(24);
+  const enabled = loadSyncSettings().enabled;
+  const refresh = () => { listShareLinks(match.id).then(setLinks).catch(() => setLinks([])); };
+  useEffect(() => { if (enabled) refresh(); }, [match.id, enabled]); // eslint-disable-line react-hooks/exhaustive-deps
+  async function create() {
+    setBusy(true); setError(""); setCreated(undefined);
+    try { setCreated(await createShareLink(match.id, { kind: "live", opponentDisplay, includeMentalStates, includeTimeline, expiresInHours })); refresh(); }
+    catch (failure) { setError(failure instanceof Error ? failure.message : "Could not create the link."); }
+    setBusy(false);
+  }
+  if (!enabled) return <section className="data-card"><h2>Live spectator link</h2><p>Turn on cloud sync in Export to create a read-only link someone else can follow while the match is being tracked.</p></section>;
+  return <section className="data-card"><h2>Live spectator link</h2><p>A read-only link to this match only. It expires, can be revoked at any time, and is excluded from search indexing. Mental-state observations are withheld unless you include them, and free-form notes never travel.</p>
+    <label className="data-select">Opponent shown as<select value={opponentDisplay} onChange={(event) => setOpponentDisplay(event.target.value as "full" | "initials" | "hidden")}><option value="initials">Initials only</option><option value="hidden">Hidden</option><option value="full">Full name</option></select></label>
+    <label className="data-select">Link expires after<select value={expiresInHours} onChange={(event) => setExpiresInHours(Number(event.target.value))}><option value={4}>4 hours</option><option value={24}>24 hours</option><option value={72}>3 days</option><option value={168}>7 days</option></select></label>
+    <label className="check-row"><input type="checkbox" checked={includeTimeline} onChange={(event) => setIncludeTimeline(event.target.checked)} />Include the point timeline</label>
+    <label className="check-row"><input type="checkbox" checked={includeMentalStates} onChange={(event) => setIncludeMentalStates(event.target.checked)} />Include mental-state observations</label>
+    <button disabled={busy} onClick={create}>{busy ? "Creating…" : "Create live link"}</button>
+    {error && <p className="validation-error">{error}</p>}
+    {created && <p className="share-url">{created.url}<small>Copy it now&mdash;the link is shown once.</small></p>}
+    {links.length > 0 && <div className="link-list">{links.map((link) => <span key={link.id}>{link.active ? "● " : "○ "}{new Date(link.createdAt).toLocaleString()} · {link.opponentDisplay}{link.active && <button className="text-button" onClick={() => revokeShareLink(link.id).then(refresh).catch(() => undefined)}>Revoke</button>}</span>)}</div>}
+  </section>;
 }
 
 function MentalSelect({ label, value, onChange }: { label: string; value: MentalState; onChange: (value: MentalState) => void }) { return <label>{label}<select value={value} onChange={(event) => onChange(event.target.value as MentalState)}>{Object.entries(mentalLabels).map(([key, text]) => <option key={key} value={key}>{text}</option>)}</select></label>; }
