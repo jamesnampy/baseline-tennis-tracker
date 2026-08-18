@@ -1,5 +1,6 @@
 import { FORMAT_RULES, hasCompleteShotDetails, otherPlayer } from "./model.ts";
 import type {
+  FinalStroke,
   MatchConfig,
   MatchEvent,
   PlayerKey,
@@ -30,12 +31,41 @@ export interface PlayerStats {
   breakPointsFaced: number;
   breakPointsSaved: number;
   longestStreak: number;
-  forehandOutcomes: number;
-  backhandOutcomes: number;
+  /** Point-ending shots split by whether they won or lost the point, per stroke. */
+  strokeOutcomes: Record<FinalStroke, ShotBreakdown>;
+  /** Points ended at the net, by volley or overhead. */
+  netPlay: ShotBreakdown;
   rallyWins: Record<string, number>;
-  shotTypeOutcomes: Record<ShotType, { winners: number; errors: number; total: number }>;
+  shotTypeOutcomes: Record<ShotType, ShotBreakdown>;
   winnerPatterns: Record<"approach_shot" | "passing_shot" | "cross_court" | "inside_out" | "inside_in", number>;
 }
+
+/**
+ * One shot category's observed point endings.
+ *
+ * `winners` counts endings that won the point for this player — an observed
+ * winner, a return winner, or an error this player forced. `errors` counts the
+ * endings that lost it: a return error or an unforced error. `total` is every
+ * observation, so `winners + errors` can be smaller when an outcome was never
+ * recorded for the point.
+ */
+export interface ShotBreakdown {
+  winners: number;
+  errors: number;
+  total: number;
+}
+
+/**
+ * Net effect of a shot category: endings that won the point minus endings that
+ * lost it. A player who hits three forehand winners and five forehand unforced
+ * errors is at -2, not +8.
+ */
+export const shotImpact = (breakdown: ShotBreakdown): number => breakdown.winners - breakdown.errors;
+
+const emptyBreakdown = (): ShotBreakdown => ({ winners: 0, errors: 0, total: 0 });
+
+/** Shots played at the net. A drop shot is usually hit from the baseline, so it is not one. */
+const NET_SHOT_TYPES: ShotType[] = ["volley", "overhead"];
 
 export interface MatchStats {
   my: PlayerStats;
@@ -69,16 +99,16 @@ function emptyPlayerStats(): PlayerStats {
     breakPointsFaced: 0,
     breakPointsSaved: 0,
     longestStreak: 0,
-    forehandOutcomes: 0,
-    backhandOutcomes: 0,
+    strokeOutcomes: { forehand: emptyBreakdown(), backhand: emptyBreakdown(), neither: emptyBreakdown() },
+    netPlay: emptyBreakdown(),
     rallyWins: { "1-5": 0, "6-10": 0, "11-20": 0, "21+": 0 },
     shotTypeOutcomes: {
-      groundstroke: { winners: 0, errors: 0, total: 0 },
-      slice: { winners: 0, errors: 0, total: 0 },
-      volley: { winners: 0, errors: 0, total: 0 },
-      drop_shot: { winners: 0, errors: 0, total: 0 },
-      lob: { winners: 0, errors: 0, total: 0 },
-      overhead: { winners: 0, errors: 0, total: 0 },
+      groundstroke: emptyBreakdown(),
+      slice: emptyBreakdown(),
+      volley: emptyBreakdown(),
+      drop_shot: emptyBreakdown(),
+      lob: emptyBreakdown(),
+      overhead: emptyBreakdown(),
     },
     winnerPatterns: { approach_shot: 0, passing_shot: 0, cross_court: 0, inside_out: 0, inside_in: 0 },
   };
@@ -165,15 +195,24 @@ function applyDetails(
   if (details.outcome === "return_error") player.returnErrors += 1;
   if (details.outcome === "forced_error") player.forcedErrors += 1;
   if (details.outcome === "unforced_error") player.unforcedErrors += 1;
-  if (details.finalStroke === "forehand") player.forehandOutcomes += 1;
-  if (details.finalStroke === "backhand") player.backhandOutcomes += 1;
   const winningOutcome = details.outcome === "winner" || details.outcome === "return_winner";
+  // Attribution (requirements section 8): a winner, return winner, or forced
+  // error belongs to the point winner; an unforced error or return error
+  // belongs to the point loser. So the shot always belongs to the player these
+  // two lists say it does, and `owner` above resolves to the same player.
   const wonWithSelectedShot = winningOutcome || details.outcome === "forced_error";
-  if (details.shotType) {
-    const breakdown = player.shotTypeOutcomes[details.shotType];
+  const lostWithSelectedShot = details.outcome === "return_error" || details.outcome === "unforced_error";
+  // Every shot category is tallied the same way, so forehand impact, net
+  // conversion, and the shot-type table can never disagree about one point.
+  const tally = (breakdown: ShotBreakdown) => {
     breakdown.total += 1;
     if (wonWithSelectedShot) breakdown.winners += 1;
-    if (details.outcome === "return_error" || details.outcome === "unforced_error") breakdown.errors += 1;
+    if (lostWithSelectedShot) breakdown.errors += 1;
+  };
+  if (details.finalStroke) tally(player.strokeOutcomes[details.finalStroke]);
+  if (details.shotType) {
+    tally(player.shotTypeOutcomes[details.shotType]);
+    if (NET_SHOT_TYPES.includes(details.shotType)) tally(player.netPlay);
   }
   if (winningOutcome) {
     if (details.shotSituation) player.winnerPatterns[details.shotSituation] += 1;

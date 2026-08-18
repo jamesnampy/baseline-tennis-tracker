@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { applyPoint, derivedCompletions, initialScore, numberedPointEvents, pointGameNumber, pointScoreLabel, pointSetNumber, projectScore } from "../lib/tennis/scoring.ts";
 import { eligiblePointOutcomes, hasCompleteShotDetails, isErrorOutcome, isPointOutcomeValid, pointDetailsPlayer, usesAdvancedShotOptions, usesBallLandingOptions } from "../lib/tennis/model.ts";
-import { buildStats, filterEventsForStatsScope, pointStatsScope } from "../lib/tennis/analytics.ts";
+import { buildStats, filterEventsForStatsScope, pointStatsScope, shotImpact } from "../lib/tennis/analytics.ts";
 import { buildPressureAnalytics } from "../lib/tennis/pressure.ts";
 import { createPlayerProfile, linkPlayerIdentity, playerProfileAnalytics, versionPlayerProfile } from "../lib/tennis/profiles.ts";
 import { buildExportBundle, staleStrategyEventIds, zipFiles } from "../lib/tennis/export.ts";
@@ -274,4 +274,96 @@ test("the export bundle publishes derived game, set, status, and review tables",
   assert.match(bundle.files["games.csv"], /game-1/); assert.match(bundle.files["sets.csv"], /set-1/);
   assert.match(bundle.files["points.csv"], /set_number/); assert.match(bundle.files["points.csv"], /game_number/);
   assert.match(bundle.files["manifest.json"], /baseline-mvp-1\.2\.2/);
+});
+
+test("stroke impact subtracts errors instead of counting every observation", () => {
+  const match = fixtureMatch();
+  match.events = [];
+  let sequence = 0;
+  // Two forehand winners and three forehand unforced errors, all my player's.
+  const add = (outcome, finalStroke, shotType) => {
+    const point = completedPoint(outcome === "winner" ? "my" : "opponent");
+    sequence += 1; point.id = `p${sequence}`; point.pointGroupId = `g${sequence}`; point.sequence = sequence;
+    match.events.push(point, {
+      id: `a${sequence}`, matchId: match.id, schemaVersion: 1, sequence: sequence + 100,
+      timestamp: new Date(sequence).toISOString(), source: "tracked", type: "point_annotated",
+      pointGroupId: point.pointGroupId, payload: { outcome, finalStroke, shotType, finalStrokePlayer: "my" },
+    });
+  };
+  add("winner", "forehand", "groundstroke");
+  add("winner", "forehand", "groundstroke");
+  add("unforced_error", "forehand", "groundstroke");
+  add("unforced_error", "forehand", "groundstroke");
+  add("unforced_error", "forehand", "groundstroke");
+
+  const stroke = buildStats(match.events, match.config).my.strokeOutcomes.forehand;
+  assert.deepEqual(stroke, { winners: 2, errors: 3, total: 5 });
+  // The whole point of the fix: five observed forehands nets to -1, not +5.
+  assert.equal(shotImpact(stroke), -1);
+});
+
+test("net conversion counts volleys and overheads, not drop shots", () => {
+  const match = fixtureMatch();
+  match.events = [];
+  let sequence = 0;
+  const add = (outcome, shotType) => {
+    const point = completedPoint(outcome === "winner" ? "my" : "opponent");
+    sequence += 1; point.id = `p${sequence}`; point.pointGroupId = `g${sequence}`; point.sequence = sequence;
+    match.events.push(point, {
+      id: `a${sequence}`, matchId: match.id, schemaVersion: 1, sequence: sequence + 100,
+      timestamp: new Date(sequence).toISOString(), source: "tracked", type: "point_annotated",
+      pointGroupId: point.pointGroupId, payload: { outcome, finalStroke: "forehand", shotType, finalStrokePlayer: "my" },
+    });
+  };
+  add("winner", "volley");
+  add("winner", "overhead");
+  add("unforced_error", "volley");
+  add("winner", "drop_shot");
+
+  const stats = buildStats(match.events, match.config).my;
+  assert.deepEqual(stats.netPlay, { winners: 2, errors: 1, total: 3 });
+  assert.equal(shotImpact(stats.netPlay), 1);
+  assert.equal(stats.shotTypeOutcomes.drop_shot.winners, 1);
+});
+
+test("a forced error credits the player who forced it, on both the stroke and the shot type", () => {
+  const match = fixtureMatch();
+  match.events = [];
+  const point = completedPoint("my");
+  point.id = "p1"; point.pointGroupId = "g1"; point.sequence = 1;
+  match.events.push(point, {
+    id: "a1", matchId: match.id, schemaVersion: 1, sequence: 2,
+    timestamp: new Date(1).toISOString(), source: "tracked", type: "point_annotated",
+    pointGroupId: "g1", payload: { outcome: "forced_error", finalStroke: "backhand", shotType: "slice", finalStrokePlayer: "my" },
+  });
+  const stats = buildStats(match.events, match.config).my;
+  assert.deepEqual(stats.strokeOutcomes.backhand, { winners: 1, errors: 0, total: 1 });
+  assert.deepEqual(stats.shotTypeOutcomes.slice, { winners: 1, errors: 0, total: 1 });
+});
+
+test("shot attribution and the win/error tally agree for every outcome", () => {
+  // Section 8: winner, return winner, and forced error belong to the point
+  // winner; unforced error and return error belong to the point loser. The
+  // shot tallies must follow the same split, or a stroke's impact would credit
+  // the wrong player.
+  const winning = ["winner", "return_winner", "forced_error"];
+  const losing = ["unforced_error", "return_error"];
+  for (const outcome of [...winning, ...losing]) {
+    const pointWonByMy = completedPoint("my");
+    const owner = pointDetailsPlayer(pointWonByMy, outcome);
+    assert.equal(owner, winning.includes(outcome) ? "my" : "opponent", outcome);
+
+    const match = fixtureMatch();
+    match.events = [pointWonByMy, {
+      id: "a1", matchId: match.id, schemaVersion: 1, sequence: 2,
+      timestamp: new Date(1).toISOString(), source: "tracked", type: "point_annotated",
+      pointGroupId: pointWonByMy.pointGroupId,
+      payload: { outcome, finalStroke: "forehand", shotType: "groundstroke", finalStrokePlayer: owner },
+    }];
+    const stats = buildStats(match.events, match.config)[owner].strokeOutcomes.forehand;
+    // The owner's shot won the point exactly when the owner won the point.
+    assert.equal(stats.winners, owner === pointWonByMy.payload.winner ? 1 : 0, outcome);
+    assert.equal(stats.errors, owner === pointWonByMy.payload.winner ? 0 : 1, outcome);
+    assert.equal(stats.total, 1, outcome);
+  }
 });
