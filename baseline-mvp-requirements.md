@@ -1,9 +1,57 @@
-# Baseline Tennis Tracker — MVP Requirements
+# Baseline Tennis Tracker — Requirements
 
-**Status:** Finalized for MVP build  
-**Requirements version:** 1.2
+**Status:** MVP delivered and deployed; cloud sync, hosted API, and sharing delivered beyond MVP  
+**Requirements version:** 1.3
 **Experience reference:** `baseline-clickthrough.html` (MVP Experience v1.0)  
-**Product type:** Mobile-first installable web application (PWA)
+**Product type:** Mobile-first installable web application (PWA)  
+**Deployment:** Cloudflare Workers at `baseline.jamesvibecode.com`
+
+## 0. Implementation status
+
+Sections 1–20 describe the MVP and are implemented unless noted here. This section records what changed since version 1.2 and what remains open. Where the build deviates from a stated requirement, the deviation is named rather than quietly folded into the text.
+
+### Delivered beyond the MVP
+
+Three items were promoted out of section 21 and built:
+
+- **Cloud storage and cross-device backup.** Match events are mirrored to Cloudflare D1. Push-only by design — see the open items.
+- **Live sharing with another spectator.** A revocable, expiring link shows the score, statistics, and timeline as the match is tracked, updating over a WebSocket.
+- **Hosted API access.** Section 17's read-only contract is live at `/api/v1`, no longer contingent on future work.
+
+Additionally:
+
+- **Account authentication.** A single account password, stored only as a PBKDF2 hash, exchanged at sign-in for an HttpOnly session cookie. Section 17 required hosted access to be authenticated and revocable but did not say how. Failed logins are throttled per IP.
+- **Hosted coach reports.** The report is published as a private page rather than produced as a file.
+- **Derived match-structure events.** `game_completed`, `set_completed`, `match_completed`, `player_retired`, `strategy_requested`, and `event_corrected` complete the section 15 event list.
+- **Set and game numbers on every point**, as section 13 requires.
+- **A one-command dataset download** for a second machine, so analysis does not require the tracking device.
+
+### Corrections to earlier requirements
+
+- **Offline-first is for connectivity resilience, not privacy.** Version 1.2 framed offline capture as a privacy measure. That was wrong: courts frequently have no usable cellular service, and tracking must survive it. Privacy is enforced separately, by keeping hosted access off by default and redacting shared data server-side.
+- **Shot impact is a net figure.** Section 12's forehand and backhand impact were implemented as raw counts of observed point-endings, so errors incremented the same total as winners. They are now point-endings that won the point minus those that lost it.
+- **Net conversion is defined.** Section 12 named the metric without defining it. It now means points ended at the net, by volley or overhead; a drop shot is usually struck from the baseline and is excluded.
+
+### Accepted deviations
+
+- **The standalone coach-report download was removed** from the Reports screen at the product owner's request. Section 18 asks for both a hosted page and a self-contained download. The download form survives inside the analysis bundle as `match-report.html`, but there is no longer a one-tap way to produce a coach report without cloud sync configured.
+- **Password hashing runs at 100,000 PBKDF2 iterations**, the maximum Cloudflare Workers will execute and below the current OWASP recommendation for PBKDF2-HMAC-SHA256. The per-IP login throttle and a 12-character minimum compensate. Raising it needs a KDF the platform does not expose.
+
+### Open items
+
+Deferred deliberately, pending more collected data:
+
+1. **Cross-match export endpoint.** Every data route is scoped to one match. Bulk retrieval loops per match; the download script does that client-side.
+2. **Tournament, season, and opponent trend analysis.** A tournament key is stored and filterable, but nothing aggregates across matches.
+
+Known gaps, not yet scheduled:
+
+3. **Synchronization is push-only.** A second device never receives matches. This is intentional for a phone-first workflow; the dataset reaches a laptop through the download script instead.
+4. **`player_retired` has no user interface.** The event type, projection, timeline entry, and export are implemented, but nothing emits it, because adding a courtside control would change a frozen interface. Section 4 expects retirement to be recordable.
+5. **`event_corrected` is never emitted.** Score synchronization and point undo are the concrete corrections; the generic type exists for imported and future data.
+6. **A stale strategy review is computed but not shown in the app.** Section 14 requires a review to be marked stale once a point it analyzed is undone. The flag reaches exports and the API only.
+7. **A report link renders the match as it stands when opened**, not as it stood when the link was created. Section 18 requires a shared report to be an immutable snapshot, with corrections producing a new version rather than silently changing what a coach already reviewed. Storing the event cutoff on the link would close this.
+8. **Sign-in has no automated browser test.** The API flow is covered end to end; the browser path is verified by hand.
 
 ## 1. Product purpose
 
@@ -31,7 +79,9 @@ The interface must prioritize accurate score capture. Optional details must neve
 - IndexedDB for device-local match storage and offline recovery.
 - Service worker and installable web-app manifest.
 - Event-sourced match model: saved events are authoritative; scores and statistics are projections.
-- Cloudflare-based hosting for the web application.
+- Cloudflare-based hosting for the web application. Delivered as a Vite and React SPA on Workers Assets, with a Worker serving `/api/*` and `/report/*`.
+- Cloudflare D1 as the hosted event store, mirroring the device's log. One Durable Object per match orders appends and fans new events out to live spectators.
+- Each hosted capability degrades independently: with no database binding the API answers 503 and tracking is unaffected; with no Durable Object binding live updates stop and everything else keeps working; with no credential configured hosted access stays off entirely.
 - Vendor-neutral analysis interface so an approved LLM provider can be changed later.
 - Automated scoring-engine tests covering all supported formats, tiebreaks, undo, and score synchronization.
 
@@ -409,11 +459,15 @@ Shot quality is shown separately for each player using a player dropdown.
 
 Initial derived metrics:
 
-- Forehand impact
-- Backhand impact
-- Net conversion
-- Return quality
-- Outcomes by rally range
+- **Forehand impact** — forehand point-endings that won the point minus those that lost it
+- **Backhand impact** — the same, for backhands
+- **Net conversion** — points ended at the net, by volley or overhead, won as a share of those observed. A drop shot is usually struck from the baseline and is not counted as net play.
+- **Return quality** — return winners minus return errors
+- **Outcomes by rally range** — points won within each rally-length band
+
+An impact metric is a net figure, never a count of observations: three forehand winners against five forehand unforced errors is −2 over a sample of eight, not +8.
+
+Which side of an impact figure a shot lands on follows the attribution rules in section 8. A winner, return winner, or forced error belongs to the point winner and counts toward their winning total; an unforced error or return error belongs to the point loser and counts against them. The owner's winning bucket is therefore exactly the point-endings that owner won.
 
 Shot quality is based only on observed point-ending shots. It must not imply that every stroke in the rally was evaluated. Each metric displays its sample size and supporting calculation.
 
@@ -518,6 +572,8 @@ Match records reference stable player-profile IDs while retaining match-day disp
 
 ## 16. Offline persistence and recovery
 
+Offline capture exists for connectivity resilience, not privacy: courts frequently have no usable cellular service, and tracking must never be interrupted by a dropped connection. Privacy is enforced separately, in sections 17 and 19.
+
 - Every action is saved immediately to IndexedDB.
 - An unfinished match resumes after refresh, browser termination, or device restart.
 - Match tracking works without network access.
@@ -564,11 +620,19 @@ The authoritative event model must also support a documented, versioned, read-on
 
 Device-local records are not exposed to a hosted API unless the user explicitly enables an upload or cloud-sync capability. Hosted API access is disabled by default, authenticated, read-only, user-scoped, and revocable. A Codex, Claude, or other third-party analysis session receives data only through an explicit user download or an explicitly granted API credential. The API representation must match the downloadable event schema so analyses remain reproducible and vendor-neutral.
 
-The local-only MVP must deliver the complete analysis bundle and preserve this API contract. Activating remote API access depends on the future encrypted cloud-backup and cross-device synchronization capability.
+**Status: delivered.** The contract is served at `/api/v1` and `GET /api/v1/schema` documents it without credentials. Two credentials are accepted: a session cookie obtained by signing in with the account password, for the app; and a bearer token, for scripts and analysis tooling where no browser holds a cookie. With neither configured every route answers 503, which is how "disabled by default" is enforced rather than merely stated.
+
+Every response carries the schema version, dataset version, generation timestamp, coverage, and anonymization status.
+
+Retrieval is per match. A single call returning every match's tables is an open item, so bulk retrieval currently loops; `npm run pull` does that and writes a combined dataset to a second machine without that machine syncing matches into its own store.
 
 ## 18. Shareable coach match report
 
-After a match, the user can create a read-only match-result report designed for review with a coach. The report is available as a mobile-friendly web page and a self-contained HTML download that can be printed or saved as PDF.
+After a match, the user can create a read-only match-result report designed for review with a coach. The report is published as a private, mobile-friendly web page at `/report/<token>`, rendered server-side.
+
+The report includes shot analytics for both players — stroke impact, net conversion, return quality, per-shot-type impact, points won by rally length, and winner patterns — alongside the service, return, point, and pressure statistics.
+
+**Deviation:** the standalone self-contained HTML download was removed from the Reports screen at the product owner's request. The download form survives inside the analysis bundle as `match-report.html`. A coach report therefore now requires cloud sync to be configured.
 
 The report includes:
 
@@ -586,9 +650,13 @@ The self-contained HTML report can be created from device-local data without upl
 
 A shared report is an immutable snapshot of the selected dataset and privacy choices. Regenerating analysis or correcting the match creates a new report version and marks older versions as out of date; it does not silently change what a coach previously reviewed.
 
+**Open item:** a report link currently renders the match as it stands when the page is opened, not as it stood when the link was created. Privacy choices are frozen with the link and enforced server-side — the link's own flags overrule the stored report options, so a link can never disclose more than it was created with — but the dataset is not yet frozen. Storing the event cutoff on the link would close this.
+
 ## 19. Privacy
 
-- Match and mental-state data remain on the device by default.
+- Match and mental-state data remain on the device by default. Offline capture is for connectivity resilience; privacy comes from hosted access being off until enabled, and from server-side redaction of anything shared.
+- Live and report links exclude mental-state observations unless explicitly included, and exclude free-form notes even then. The opponent is shown as initials by default and can be hidden entirely.
+- Redaction happens in the Worker before data leaves it, so a shared page cannot opt back in to what its link excludes.
 - External analysis is always user initiated.
 - Exports can be anonymized.
 - Observed mental states are labeled as subjective observations.
@@ -627,13 +695,19 @@ The MVP is complete when:
 
 ## 21. Future enhancements
 
-- Encrypted cloud backup and cross-device synchronization
+Delivered since version 1.2:
+
+- ~~Encrypted cloud backup and cross-device synchronization~~ — delivered as push-only synchronization to Cloudflare D1. Matches are never synchronized back down to a second device, by choice; a laptop obtains the dataset through the download script.
+- ~~Live sharing with another spectator~~ — delivered as revocable, expiring, server-redacted live links.
+
+Outstanding, in the order they are likely to matter:
+
+- Cross-match export in a single request
+- Tournament, season, and opponent trend analysis
 - Advanced profile merge suggestions and duplicate-player detection
 - Automated USTA tournament metadata import when permitted
-- Tournament, season, and opponent trend analysis
 - Apple Watch input
 - Native iOS packaging or SwiftUI client
-- Live sharing with another spectator
 - Video synchronization and court-placement diagrams
 - Advanced coaching and practice-plan generation
 
