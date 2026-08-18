@@ -133,10 +133,9 @@ Spectators replay the same `lib/tennis/` projections the tracker uses, so there 
 
 ## Coach reports
 
-A coach report can be sent two ways, and both come from the same builder so they never diverge:
+A coach report is sent as a link. `POST /api/v1/matches/:id/share` with `kind: "report"` mints `/report/<token>`, a private page the coach opens on any device, rendered server-side by the Worker — no app bundle, no sign-in.
 
-- **A link.** `POST /api/v1/matches/:id/share` with `kind: "report"` mints `/report/<token>`, a private page the coach opens on any device. The Worker renders it server-side — no app bundle, no sign-in.
-- **A download.** The self-contained HTML file still works with no connection at all, which is what section 18 requires alongside the hosted page.
+The standalone HTML download was removed from the Reports screen at the product owner's request. Requirements section 18 asks for both a hosted page and a self-contained download; the download form survives inside the analysis bundle as `match-report.html`, but there is no longer a one-tap way to produce a coach report without cloud sync configured.
 
 The report carries a two-player statistics table with numerator, denominator, sample size, and tracking coverage on every rate; **shot analytics** (stroke impact, net conversion, return quality, per-shot-type impact, points by rally length, winner patterns); set-by-set and point-by-point timelines; evidence-based observations kept separate from recommendations; and data-quality disclosures.
 
