@@ -13,7 +13,7 @@
  * scripted.
  */
 import { execFileSync } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { pbkdf2Sync, randomBytes } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
@@ -22,6 +22,9 @@ const WRANGLER_CONFIG = "wrangler.jsonc";
 const DATABASE_NAME = "baseline-tennis-tracker";
 const PLACEHOLDER = "REPLACE_WITH_D1_DATABASE_ID";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// Must match worker/api/auth.ts.
+const PBKDF2_ITERATIONS = 210_000;
+const MIN_PASSWORD_LENGTH = 12;
 
 const dryRun = process.argv.includes("--dry-run");
 
@@ -175,19 +178,86 @@ function syncTokenExists() {
   return null;
 }
 
-async function ensureSyncToken(rl) {
+/**
+ * Hashes the password here so the plaintext never reaches Cloudflare. Format
+ * matches worker/api/auth.ts: pbkdf2$<iterations>$<salt>$<hash>.
+ */
+function hashPassword(password) {
+  const salt = randomBytes(16);
+  const hash = pbkdf2Sync(password, salt, PBKDF2_ITERATIONS, 32, "sha256");
+  return `pbkdf2$${PBKDF2_ITERATIONS}$${salt.toString("base64")}$${hash.toString("base64")}`;
+}
+
+function secretExists(name) {
+  for (const args of [["secret", "list", "--format", "json"], ["secret", "list"]]) {
+    let output;
+    try {
+      output = wrangler(args);
+    } catch (error) {
+      output = String(error?.stdout ?? "") + String(error?.stderr ?? "");
+    }
+    if (dryRun) return true;
+    if (/Worker .*not found|not_found|10007/i.test(output)) return "no-worker";
+    try {
+      const parsed = JSON.parse(output);
+      if (Array.isArray(parsed)) return parsed.some((secret) => secret?.name === name);
+    } catch {
+      if (new RegExp(name).test(output)) return true;
+      if (/secret|name/i.test(output)) return false;
+    }
+  }
+  return null;
+}
+
+/**
+ * The account password. This is what a browser signs in with, so it is the one
+ * credential that has to be memorable — nothing is stored on the device.
+ */
+async function ensurePassword(rl) {
+  style.step("Setting the account password");
+  const exists = secretExists("AUTH_PASSWORD_HASH");
+  if (exists === "no-worker") return "pending-deploy";
+  if (exists === true) {
+    style.skip("Already set. Re-run with --reset-password to change it.");
+    return null;
+  }
+
+  let password = "";
+  while (true) {
+    password = (await rl.question(`  Choose a password (at least ${MIN_PASSWORD_LENGTH} characters): `)).trim();
+    if (password.length < MIN_PASSWORD_LENGTH) {
+      style.warn(`Too short — ${MIN_PASSWORD_LENGTH} characters minimum.`);
+      continue;
+    }
+    const again = (await rl.question("  Type it again: ")).trim();
+    if (again !== password) {
+      style.warn("Those did not match.");
+      continue;
+    }
+    break;
+  }
+
+  wrangler(["secret", "put", "AUTH_PASSWORD_HASH"], { input: `${hashPassword(password)}\n` });
+  style.ok("Stored as a PBKDF2 hash. Cloudflare never sees the password itself.");
+  return "set";
+}
+
+async function ensureSyncToken(rl, passwordState) {
   style.step("Setting the SYNC_TOKEN secret");
   const exists = syncTokenExists();
-  if (exists === "no-worker") {
-    style.skip("The Worker does not exist yet, so there is nothing to hold a secret.");
-    console.log("\n  Deploy first, then run this again to generate the token:\n");
-    console.log("      npm run deploy");
-    console.log("      npm run setup:cloudflare\n");
-    return "pending-deploy";
-  }
+  if (exists === "no-worker") return "pending-deploy";
   if (exists === true) {
     style.skip("Already set. Run `npx wrangler secret put SYNC_TOKEN` to rotate it.");
     return null;
+  }
+  // With a password configured, the app signs in and needs no token at all. A
+  // token is only for scripts hitting the API, so it is opt-in.
+  if (passwordState) {
+    const wanted = (await rl.question("  Also create a bearer token for scripts and the analysis API? [y/N] ")).trim().toLowerCase();
+    if (wanted !== "y" && wanted !== "yes") {
+      style.skip("Skipped. The app signs in with the password; add one later with `npx wrangler secret put SYNC_TOKEN`.");
+      return null;
+    }
   }
   if (exists === null) {
     style.warn("Could not read the existing secrets from Cloudflare.");
@@ -220,16 +290,24 @@ async function main() {
   applyMigrations();
 
   const rl = createInterface({ input: process.stdin, output: process.stdout });
+  let passwordState;
   let tokenState;
   try {
-    tokenState = await ensureSyncToken(rl);
+    passwordState = await ensurePassword(rl);
+    if (passwordState !== "pending-deploy") tokenState = await ensureSyncToken(rl, passwordState);
   } finally {
     rl.close();
   }
 
-  // Nothing more to say until the Worker exists; ensureSyncToken already
-  // printed the two commands that finish the job.
-  if (tokenState === "pending-deploy") return;
+  // Secrets need a Worker to live on, so nothing more can be done until the
+  // first deploy has created one.
+  if (passwordState === "pending-deploy" || tokenState === "pending-deploy") {
+    style.skip("The Worker does not exist yet, so it has nothing to hold secrets.");
+    console.log("\n  Deploy first, then run this again:\n");
+    console.log("      npm run deploy");
+    console.log("      npm run setup:cloudflare\n");
+    return;
+  }
 
   style.step("Setup complete");
   console.log(`

@@ -26,3 +26,6 @@
 /* Read-only spectator view. Reuses the tracker's scoreboard, stats table, and
    timeline styles; only the shell and connection badge are new. */
 .live-shell{overflow:auto;padding-bottom:30px}.live-shell .scoreboard{margin:14px 15px}.live-shell .connection-strip{position:static;margin:0 15px 6px}.live-status.live{color:#4a7a1f}.live-status.polling,.live-status.connecting{color:var(--muted)}.live-status.closed{color:#a63224}.live-section-gap{margin-top:28px}.live-empty{display:grid;place-items:center;gap:10px;text-align:center;padding:60px 24px}.live-empty h1{font-size:26px;letter-spacing:-.04em;margin:0}.live-empty p{font-size:11px;color:var(--muted);line-height:1.5;max-width:280px}
+
+/* Signed-in indicator on the cloud sync card. */
+.signed-in{font-size:10px!important;font-weight:900;color:#4a7a1f!important;letter-spacing:.04em;margin:10px 0}.data-card code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10px;background:#eceae1;border-radius:5px;padding:1px 5px}

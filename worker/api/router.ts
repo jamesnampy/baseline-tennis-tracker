@@ -12,6 +12,17 @@
  * are scoped to a single match, and are redacted server-side in `share.ts`.
  */
 import { buildStats } from "@/lib/tennis/analytics.ts";
+import {
+  clearedSessionCookie,
+  constantTimeEquals,
+  issueSession,
+  MAX_ATTEMPTS,
+  readCookie,
+  SESSION_COOKIE,
+  sessionCookie,
+  verifyPassword,
+  verifySession,
+} from "./auth.ts";
 import { buildExportBundle, staleStrategyEventIds } from "@/lib/tennis/export.ts";
 import { buildCoachReport, type CoachReportOptions } from "@/lib/tennis/report.ts";
 import { DATASET_VERSION } from "@/lib/tennis/model.ts";
@@ -38,6 +49,7 @@ import {
 } from "./share.ts";
 import {
   appendEvents,
+  clearFailures,
   eventFromRow,
   type AppendResult,
   findShareLinkByHash,
@@ -50,16 +62,26 @@ import {
   listPlayerRows,
   listShareLinks,
   loadMatch,
+  recordFailure,
   matchFromRows,
   revokeShareLink,
   upsertIdentityMappings,
+  throttleCheck,
   upsertMatch,
   upsertPlayers,
 } from "./store.ts";
 
 export interface ApiEnv {
   DB?: D1Database;
-  /** Shared bearer secret. Unset means hosted access stays off. */
+  /**
+   * PBKDF2 hash of the account password. This is what a browser signs in
+   * against, so nothing secret has to be stored on the device.
+   */
+  AUTH_PASSWORD_HASH?: string;
+  /**
+   * Shared bearer secret for scripts and the read-only analysis API, where
+   * there is no browser to hold a session cookie. Optional once a password is set.
+   */
   SYNC_TOKEN?: string;
   /** One room per match: serializes appends and fans them out to spectators. */
   MATCH_ROOM?: DurableObjectNamespace;
@@ -104,29 +126,71 @@ function requireDatabase(env: ApiEnv): D1Database | Response {
 }
 
 /**
- * Constant-time-ish comparison. The tokens are equal length in the expected
- * case, so a length mismatch is rejected up front and the loop never leaks
- * position through an early return.
+ * Accepts either a signed session cookie (the app, after signing in) or a
+ * bearer token (scripts and the analysis API). With neither credential
+ * configured, hosted access stays off entirely.
  */
-function secretsMatch(provided: string, expected: string): boolean {
-  if (provided.length !== expected.length) return false;
-  let difference = 0;
-  for (let index = 0; index < provided.length; index += 1) {
-    difference |= provided.charCodeAt(index) ^ expected.charCodeAt(index);
-  }
-  return difference === 0;
-}
-
-function authorize(request: Request, env: ApiEnv): Response | null {
-  if (!env.SYNC_TOKEN) {
+async function authorize(request: Request, env: ApiEnv): Promise<Response | null> {
+  if (!env.AUTH_PASSWORD_HASH && !env.SYNC_TOKEN) {
     return json({ error: "Hosted access is disabled for this deployment." }, 503);
   }
-  const header = request.headers.get("authorization") ?? "";
-  const token = header.toLowerCase().startsWith("bearer ") ? header.slice(7).trim() : "";
-  if (!token || !secretsMatch(token, env.SYNC_TOKEN)) {
-    return json({ error: "Unauthorized." }, 401, { "www-authenticate": "Bearer" });
+
+  if (env.AUTH_PASSWORD_HASH) {
+    const cookie = readCookie(request, SESSION_COOKIE);
+    if (await verifySession(env.AUTH_PASSWORD_HASH, cookie)) return null;
   }
-  return null;
+
+  if (env.SYNC_TOKEN) {
+    const header = request.headers.get("authorization") ?? "";
+    const token = header.toLowerCase().startsWith("bearer ") ? header.slice(7).trim() : "";
+    if (token && constantTimeEquals(token, env.SYNC_TOKEN)) return null;
+  }
+
+  return json({ error: "Unauthorized." }, 401, { "www-authenticate": "Bearer" });
+}
+
+/**
+ * Sign in, sign out, and report session state.
+ *
+ * The password never leaves the request: it is compared against a PBKDF2 hash
+ * and the browser receives an HttpOnly cookie it cannot read. Failures are
+ * throttled per IP, because this endpoint is reachable from anywhere.
+ */
+async function handleSession(request: Request, env: ApiEnv): Promise<Response> {
+  const configured = Boolean(env.AUTH_PASSWORD_HASH);
+
+  if (request.method === "GET") {
+    const authenticated = configured && await verifySession(env.AUTH_PASSWORD_HASH!, readCookie(request, SESSION_COOKIE));
+    return json({ configured, authenticated });
+  }
+
+  if (request.method === "DELETE") {
+    return json({ authenticated: false }, 200, { "set-cookie": clearedSessionCookie() });
+  }
+
+  if (request.method !== "POST") return json({ error: "Method not allowed." }, 405);
+  if (!configured) return json({ error: "No password is set for this deployment." }, 503);
+
+  const body = await readJson<{ password?: string }>(request);
+  const password = body?.password ?? "";
+  const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
+
+  if (env.DB) {
+    const failures = await throttleCheck(env.DB, ip);
+    if (failures >= MAX_ATTEMPTS) {
+      return json({ error: "Too many attempts. Try again later." }, 429, { "retry-after": "900" });
+    }
+  }
+
+  if (!password || !(await verifyPassword(password, env.AUTH_PASSWORD_HASH!))) {
+    if (env.DB) await recordFailure(env.DB, ip);
+    // Deliberately identical whatever went wrong.
+    return json({ error: "That password was not accepted." }, 401);
+  }
+
+  if (env.DB) await clearFailures(env.DB, ip);
+  const session = await issueSession(env.AUTH_PASSWORD_HASH!);
+  return json({ authenticated: true }, 200, { "set-cookie": sessionCookie(session.value, session.maxAge) });
 }
 
 function pointRows(match: MatchRecord) {
@@ -193,7 +257,10 @@ export async function handleApiRequest(request: Request, env: ApiEnv, url: URL):
 
   if (segments[0] === "live") return handleLiveRequest(request, env, segments, url);
 
-  const denied = authorize(request, env);
+  // Signing in cannot itself require being signed in.
+  if (segments[0] === "session" && segments.length === 1) return handleSession(request, env);
+
+  const denied = await authorize(request, env);
   if (denied) return denied;
   const db = requireDatabase(env);
   if (db instanceof Response) return db;
@@ -528,10 +595,17 @@ function contractDescriptor(env: ApiEnv) {
     schemaVersion: 1,
     datasetVersion: DATASET_VERSION,
     generatedAt: new Date().toISOString(),
-    enabled: Boolean(env.SYNC_TOKEN && env.DB),
-    access: "authenticated, read-only, user-scoped, revocable; disabled unless SYNC_TOKEN is set",
-    authentication: "Authorization: Bearer <SYNC_TOKEN>",
+    enabled: Boolean((env.AUTH_PASSWORD_HASH || env.SYNC_TOKEN) && env.DB),
+    access: "authenticated, read-only, user-scoped, revocable; disabled unless a password or bearer token is configured",
+    authentication: [
+      "Cookie: a session from POST /api/v1/session, for the app",
+      "Authorization: Bearer <SYNC_TOKEN>, for scripts and the analysis API",
+    ],
+    passwordConfigured: Boolean(env.AUTH_PASSWORD_HASH),
     resources: [
+      { method: "POST", path: `${API_PREFIX}/session`, description: "Sign in with the account password; sets an HttpOnly session cookie.", authentication: "none" },
+      { method: "GET", path: `${API_PREFIX}/session`, description: "Whether a password is configured and whether this browser is signed in.", authentication: "none" },
+      { method: "DELETE", path: `${API_PREFIX}/session`, description: "Sign out.", authentication: "none" },
       { method: "POST", path: `${API_PREFIX}/sync`, description: "Append events and upsert match, players, and identity mappings. Idempotent by event id." },
       { method: "GET", path: `${API_PREFIX}/matches`, description: "List authorized matches.", filters: ["limit", "updatedSince", "tournament"] },
       { method: "GET", path: `${API_PREFIX}/matches/:id`, description: "Match metadata, score projection, statistics, and pressure analytics." },

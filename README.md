@@ -63,9 +63,21 @@ npm run setup:cloudflare    # creates D1, writes its id, migrates, generates SYN
 npm run deploy              # builds and publishes to baseline.jamesvibecode.com
 ```
 
+You will be asked to choose a password. That password is the only credential you keep, and you keep it in your head — Cloudflare stores a PBKDF2 hash of it, never the password, and the device stores nothing at all. Signing in exchanges it for an HttpOnly session cookie the browser holds and no script can read.
+
 `setup:cloudflare` is safe to re-run — every step checks for its own result first, so a half-finished setup resumes rather than restarting. It never deploys, and it will not overwrite a `SYNC_TOKEN` it cannot first confirm is absent, because replacing a live one would silently stop every device already syncing. Pass `--dry-run` to see what it would do.
 
-It prints the generated `SYNC_TOKEN` once. Save it: Cloudflare cannot show it again, and it is what you paste into the app's Export screen to turn on cloud sync.
+A bearer token is offered separately and is optional. It exists for scripts and the read-only analysis API, where there is no browser to hold a cookie. The app never needs one.
+
+### Why a password rather than a stored token
+
+A Worker secret cannot be read by a browser, so the app has to present something of its own. Handing it a long random token means keeping that token somewhere — which is a secret you now have to manage. A password moves the burden to something memorable, and leaves the server holding only a hash.
+
+Consequences worth knowing:
+
+- Changing the password signs out every device, because the session signing key is derived from the stored hash.
+- Failed logins are throttled per IP (8 per 15 minutes) in D1, since the endpoint is reachable from anywhere.
+- Sessions last 30 days, then require signing in again.
 
 `deploy` bakes the public origin into the build so social-preview images resolve to absolute URLs. It resolves that origin from `VITE_PUBLIC_ORIGIN`, then `.env.production`, then the custom domain in `wrangler.jsonc` — which is how this project runs, so a fresh clone deploys correctly on the first pass with nothing to remember. With none of those, it falls back to deploying once, reading the workers.dev URL back, and rebuilding.
 
@@ -94,11 +106,11 @@ npx wrangler secret put ANTHROPIC_API_KEY
 
 Publishing puts the tracker at a public URL, but not the data. Matches live in the browser's IndexedDB and never leave the device until cloud sync is switched on with the token. Every `/api/v1` route refuses a request without the bearer token, and answers 503 outright when `SYNC_TOKEN` is unset. Share links are the only public path to match data, and each one is scoped to a single match, redacted server-side, expiring, and revocable.
 
-To take a deployment down: `npx wrangler delete`. To cut off hosted access while leaving it up, delete the secret with `npx wrangler secret delete SYNC_TOKEN` — every API route reverts to 503 and the tracker keeps working offline.
+To take a deployment down: `npx wrangler delete`. To cut off hosted access while leaving it up, delete both secrets with `npx wrangler secret delete AUTH_PASSWORD_HASH` and `npx wrangler secret delete SYNC_TOKEN` — every API route reverts to 503 and the tracker keeps working offline. To sign every device out without disabling anything, set a new password.
 
 ## Cloud sync and the analysis API
 
-Hosted access is **off by default**. Without a `SYNC_TOKEN` secret every `/api/v1` route answers 503, no device data is reachable, and the tracker behaves exactly as it does today: IndexedDB is authoritative and everything works offline.
+Hosted access is **off by default**. With neither a password nor a bearer token configured, every `/api/v1` route answers 503, no device data is reachable, and the tracker behaves exactly as it does today: IndexedDB is authoritative and everything works offline.
 
 The Worker then exposes the versioned, read-only contract from requirements section 17 at `/api/v1`, plus the one write route sync needs. `GET /api/v1/schema` documents every route and needs no credentials. Reads require `Authorization: Bearer <SYNC_TOKEN>`.
 
@@ -149,7 +161,8 @@ The app is a client-side SPA served from Cloudflare Workers Assets. The Worker h
 | `ASSETS` | The SPA bundle | Nothing is served |
 | `DB` (D1) | Event store behind sync, the API, and share links | `/api/v1` answers 503; tracking is unaffected |
 | `MATCH_ROOM` (Durable Object) | Per-match append ordering and live WebSocket fanout | Live push stops; sync, the API, and share snapshots keep working |
-| `SYNC_TOKEN` (secret) | The only credential for sync and the API | Hosted access stays off |
+| `AUTH_PASSWORD_HASH` (secret) | Password login for the app | The app cannot sign in |
+| `SYNC_TOKEN` (secret) | Bearer credential for scripts and the API | Scripts cannot authenticate |
 | `ANTHROPIC_API_KEY` (secret) | Hosted strategy review | The on-device evidence review answers instead |
 
 Each degradation is deliberate, so a partial deployment is a reduced app rather than a broken one.

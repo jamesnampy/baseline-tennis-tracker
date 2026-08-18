@@ -18,7 +18,8 @@ import {
 import { deleteMatch, loadIdentityMappings, loadMatches, loadPlayers, loadSyncStates, saveIdentityMapping, saveMatch, savePlayer, type MatchSyncState } from "@/lib/tennis/storage";
 import {
   createShareLink, flushOutbox, listShareLinks, loadSyncSettings, pendingEventCount,
-  pushMatch, revokeShareLink, saveSyncSettings, type ShareLink, type ShareLinkResponse, type SyncSettings,
+  pushMatch, revokeShareLink, saveSyncSettings, sessionStatus, signIn, signOut,
+  type SessionStatus, type ShareLink, type ShareLinkResponse, type SyncSettings,
 } from "@/lib/tennis/sync";
 
 type Tab = "track" | "stats" | "timeline" | "match";
@@ -167,7 +168,27 @@ function CloudSyncCard({ matches, players, mappings }: { matches: MatchRecord[];
   const [states, setStates] = useState<MatchSyncState[]>([]);
   const [status, setStatus] = useState("");
   const [busy, setBusy] = useState(false);
+  const [session, setSession] = useState<SessionStatus>({ configured: false, authenticated: false });
+  const [password, setPassword] = useState("");
   useEffect(() => { loadSyncStates().then(setStates).catch(() => undefined); }, []);
+  useEffect(() => { sessionStatus().then(setSession).catch(() => undefined); }, []);
+  async function submitSignIn() {
+    setBusy(true); setStatus("");
+    try {
+      await signIn(password);
+      setPassword("");
+      setSession(await sessionStatus());
+      setStatus("Signed in on this device.");
+    } catch (failure) { setStatus(failure instanceof Error ? failure.message : "Could not sign in."); }
+    setBusy(false);
+  }
+  async function submitSignOut() {
+    setBusy(true);
+    await signOut();
+    setSession(await sessionStatus());
+    setStatus("Signed out. Matches stay on this device.");
+    setBusy(false);
+  }
   const stateFor = (id: string) => states.find((state) => state.matchId === id);
   const pending = matches.reduce((total, item) => total + pendingEventCount(item, stateFor(item.id)), 0);
   const lastSyncedAt = states.map((state) => state.lastSyncedAt).filter(Boolean).sort().at(-1);
@@ -183,12 +204,22 @@ function CloudSyncCard({ matches, players, mappings }: { matches: MatchRecord[];
     setBusy(false);
   }
   return <section className="data-card"><h2>Cloud sync</h2><p>Off by default. When on, saved events are copied to your Cloudflare deployment after they are written to this device&mdash;never before. Tracking, undo, stats, and export keep working with no connection at all.</p>
-    <label className="check-row"><input type="checkbox" checked={settings.enabled} onChange={(event) => persist({ ...settings, enabled: event.target.checked })} />Enable cloud sync for this device</label>
-    <label>Access token<input type="password" value={settings.token} onChange={(event) => setSettings({ ...settings, token: event.target.value })} onBlur={() => persist(settings)} placeholder="SYNC_TOKEN" autoComplete="off" /></label>
-    <label>Endpoint (optional)<input value={settings.endpoint} onChange={(event) => setSettings({ ...settings, endpoint: event.target.value })} onBlur={() => persist(settings)} placeholder="Same origin" /></label>
-    <p>{pending} event{pending === 1 ? "" : "s"} queued{lastSyncedAt ? ` · last synced ${new Date(lastSyncedAt).toLocaleString()}` : " · never synced"}</p>
-    {lastError && <p className="validation-error">{lastError}</p>}
-    <button disabled={busy || !settings.enabled || !matches.length} onClick={syncNow}>{busy ? "Syncing…" : "Sync now"}</button>
+    {session.configured
+      ? session.authenticated
+        ? <>
+            <p className="signed-in">● Signed in on this device</p>
+            <label className="check-row"><input type="checkbox" checked={settings.enabled} onChange={(event) => persist({ ...settings, enabled: event.target.checked })} />Enable cloud sync for this device</label>
+            <p>{pending} event{pending === 1 ? "" : "s"} queued{lastSyncedAt ? ` · last synced ${new Date(lastSyncedAt).toLocaleString()}` : " · never synced"}</p>
+            {lastError && <p className="validation-error">{lastError}</p>}
+            <button disabled={busy || !settings.enabled || !matches.length} onClick={syncNow}>{busy ? "Syncing…" : "Sync now"}</button>
+            <button className="text-button" disabled={busy} onClick={submitSignOut}>Sign out</button>
+          </>
+        : <>
+            <p>Sign in once on this device. Nothing is stored here&mdash;the browser keeps a session it cannot read, and your password never leaves the sign-in request.</p>
+            <label>Password<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && password) submitSignIn(); }} autoComplete="current-password" /></label>
+            <button disabled={busy || !password} onClick={submitSignIn}>{busy ? "Signing in…" : "Sign in"}</button>
+          </>
+      : <p>This deployment has no password set, so cloud sync is unavailable. Run <code>npm run setup:cloudflare</code> to set one.</p>}
     {status && <p>{status}</p>}
   </section>;
 }
@@ -212,7 +243,8 @@ function ReportLinkCard({ match, options }: { match: MatchRecord; options: Coach
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [expiresInHours, setExpiresInHours] = useState(168);
-  const enabled = loadSyncSettings().enabled;
+  const [enabled, setEnabled] = useState(false);
+  useEffect(() => { sessionStatus().then((state) => setEnabled(state.authenticated)).catch(() => undefined); }, []);
   const refresh = () => { listShareLinks(match.id).then((rows) => setLinks(rows.filter((link) => link.kind === "report"))).catch(() => setLinks([])); };
   useEffect(() => { if (enabled) refresh(); }, [match.id, enabled]); // eslint-disable-line react-hooks/exhaustive-deps
   async function create() {
@@ -231,7 +263,7 @@ function ReportLinkCard({ match, options }: { match: MatchRecord; options: Coach
     } catch (failure) { setError(failure instanceof Error ? failure.message : "Could not create the link."); }
     setBusy(false);
   }
-  if (!enabled) return <section className="data-card"><h2>Send the report as a link</h2><p>Turn on cloud sync in Export to send a coach a link instead of a file. The download above works with no connection at all.</p></section>;
+  if (!enabled) return <section className="data-card"><h2>Send the report as a link</h2><p>Sign in under Export to send a coach a link instead of a file. The download above works with no connection at all.</p></section>;
   return <section className="data-card"><h2>Send the report as a link</h2><p>Publishes the report above as a private page a coach can open on any device. It uses the same options you selected, is excluded from search indexing, and can be revoked at any time. Regenerate a link after correcting the match—an existing link keeps showing what the coach already reviewed.</p>
     <label className="data-select">Link expires after<select value={expiresInHours} onChange={(event) => setExpiresInHours(Number(event.target.value))}><option value={24}>24 hours</option><option value={168}>7 days</option><option value={720}>30 days</option><option value={0}>Until revoked</option></select></label>
     <button disabled={busy} onClick={create}>{busy ? "Publishing…" : "Create report link"}</button>
@@ -255,7 +287,8 @@ function ShareLinkCard({ match }: { match: MatchRecord }) {
   const [includeMentalStates, setIncludeMentalStates] = useState(false);
   const [includeTimeline, setIncludeTimeline] = useState(true);
   const [expiresInHours, setExpiresInHours] = useState(24);
-  const enabled = loadSyncSettings().enabled;
+  const [enabled, setEnabled] = useState(false);
+  useEffect(() => { sessionStatus().then((state) => setEnabled(state.authenticated)).catch(() => undefined); }, []);
   const refresh = () => { listShareLinks(match.id).then((rows) => setLinks(rows.filter((link) => link.kind !== "report"))).catch(() => setLinks([])); };
   useEffect(() => { if (enabled) refresh(); }, [match.id, enabled]); // eslint-disable-line react-hooks/exhaustive-deps
   async function create() {
@@ -264,7 +297,7 @@ function ShareLinkCard({ match }: { match: MatchRecord }) {
     catch (failure) { setError(failure instanceof Error ? failure.message : "Could not create the link."); }
     setBusy(false);
   }
-  if (!enabled) return <section className="data-card"><h2>Live spectator link</h2><p>Turn on cloud sync in Export to create a read-only link someone else can follow while the match is being tracked.</p></section>;
+  if (!enabled) return <section className="data-card"><h2>Live spectator link</h2><p>Sign in under Export to create a read-only link someone else can follow while the match is being tracked.</p></section>;
   return <section className="data-card"><h2>Live spectator link</h2><p>A read-only link to this match only. It expires, can be revoked at any time, and is excluded from search indexing. Mental-state observations are withheld unless you include them, and free-form notes never travel.</p>
     <label className="data-select">Opponent shown as<select value={opponentDisplay} onChange={(event) => setOpponentDisplay(event.target.value as "full" | "initials" | "hidden")}><option value="initials">Initials only</option><option value="hidden">Hidden</option><option value="full">Full name</option></select></label>
     <label className="data-select">Link expires after<select value={expiresInHours} onChange={(event) => setExpiresInHours(Number(event.target.value))}><option value={4}>4 hours</option><option value={24}>24 hours</option><option value={72}>3 days</option><option value={168}>7 days</option></select></label>

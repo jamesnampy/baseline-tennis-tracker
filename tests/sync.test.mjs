@@ -38,7 +38,7 @@ function fixtureMatch(eventCount = 3) {
 let requests = [];
 function stubFetch(status = 200) {
   globalThis.fetch = async (url, init) => {
-    requests.push({ url: String(url), body: JSON.parse(init.body), headers: init.headers });
+    requests.push({ url: String(url), body: JSON.parse(init.body), headers: init.headers ?? {}, credentials: init.credentials });
     return { ok: status >= 200 && status < 300, status, json: async () => ({}) };
   };
 }
@@ -60,13 +60,26 @@ beforeEach(() => {
   stubFetch();
 });
 
-test("sync stays off until it is enabled with a token", async () => {
+test("sync stays off until it is explicitly enabled", async () => {
   assert.deepEqual(loadSyncSettings(), DEFAULT_SYNC_SETTINGS);
-  assert.equal(saveSyncSettings({ enabled: true, endpoint: "", token: "  " }).enabled, false);
+  assert.equal(DEFAULT_SYNC_SETTINGS.enabled, false);
+  // A token is no longer required to enable it: the browser authenticates with
+  // its session cookie, and the token is only for cross-origin endpoints.
+  assert.equal(saveSyncSettings({ enabled: true, endpoint: "", token: "" }).enabled, true);
   assert.equal(saveSyncSettings({ enabled: true, endpoint: "https://x.dev/", token: " k " }).endpoint, "https://x.dev");
   const report = await pushMatch(fixtureMatch(), [], [], DEFAULT_SYNC_SETTINGS, cursors);
   assert.equal(report.outcome, "disabled");
   assert.equal(requests.length, 0);
+});
+
+test("a push carries credentials, and the bearer header only when a token is set", async () => {
+  await pushMatch(fixtureMatch(1), [], [], { enabled: true, endpoint: "", token: "" }, cursors);
+  assert.equal(requests[0].credentials, "include");
+  assert.equal(requests[0].headers.authorization, undefined);
+
+  syncStates.clear();
+  await pushMatch(fixtureMatch(1), [], [], settings, cursors);
+  assert.equal(requests[1].headers.authorization, "Bearer secret");
 });
 
 test("the first push sends every event and later pushes send only what is new", async () => {
@@ -106,12 +119,12 @@ test("offline leaves events queued and does not advance the cursor", async () =>
   assert.equal((await pushMatch(match, [], [], settings, cursors)).pushed, 3);
 });
 
-test("a rejected token reports the reason and keeps every event queued", async () => {
+test("a signed-out push reports the reason and keeps every event queued", async () => {
   stubFetch(401);
   const match = fixtureMatch(2);
   const report = await pushMatch(match, [], [], settings, cursors);
   assert.equal(report.outcome, "failed");
-  assert.match(report.error, /token was rejected/);
+  assert.match(report.error, /Sign in again/);
   assert.equal(pendingEventCount(match, syncStates.get("match-1")), 2);
 
   stubFetch(200);

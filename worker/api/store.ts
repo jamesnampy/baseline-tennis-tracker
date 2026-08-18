@@ -6,6 +6,7 @@
  * does not carry an ORM at runtime.
  */
 import type { MatchConfig, MatchEvent, MatchRecord } from "@/lib/tennis/model.ts";
+import { THROTTLE_WINDOW_SECONDS } from "./auth.ts";
 import type { ShareLinkRow } from "./share.ts";
 
 export type { ShareLinkRow };
@@ -359,4 +360,32 @@ export async function revokeShareLink(db: D1Database, id: string): Promise<boole
     .bind(id, new Date().toISOString())
     .run();
   return (result.meta.changes ?? 0) > 0;
+}
+
+/**
+ * Per-IP login throttle.
+ *
+ * PBKDF2 already makes each guess cost real CPU, but a login endpoint reachable
+ * from anywhere should stop answering. Counts live in D1 rather than memory
+ * because Workers isolates are neither shared nor long-lived, so an in-process
+ * counter would reset constantly.
+ */
+export async function throttleCheck(db: D1Database, ip: string, now = Date.now()): Promise<number> {
+  const since = new Date(now - THROTTLE_WINDOW_SECONDS * 1000).toISOString();
+  const row = await db
+    .prepare("SELECT COUNT(*) AS failures FROM auth_attempts WHERE ip = ?1 AND attempted_at > ?2")
+    .bind(ip, since)
+    .first<{ failures: number }>();
+  return row?.failures ?? 0;
+}
+
+export async function recordFailure(db: D1Database, ip: string, now = Date.now()): Promise<void> {
+  await db
+    .prepare("INSERT INTO auth_attempts (id, ip, attempted_at) VALUES (?1, ?2, ?3)")
+    .bind(crypto.randomUUID(), ip, new Date(now).toISOString())
+    .run();
+}
+
+export async function clearFailures(db: D1Database, ip: string): Promise<void> {
+  await db.prepare("DELETE FROM auth_attempts WHERE ip = ?1").bind(ip).run();
 }

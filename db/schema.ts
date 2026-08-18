@@ -77,6 +77,20 @@ export const identityMappings = sqliteTable("identity_mappings", {
 });
 
 /**
+ * Failed login attempts, for the per-IP throttle.
+ *
+ * In D1 rather than memory because Workers isolates are neither shared nor
+ * long-lived, so an in-process counter would reset constantly.
+ */
+export const authAttempts = sqliteTable("auth_attempts", {
+  id: text("id").primaryKey(),
+  ip: text("ip").notNull(),
+  attemptedAt: text("attempted_at").notNull(),
+}, (table) => [
+  index("auth_attempts_ip_idx").on(table.ip, table.attemptedAt),
+]);
+
+/**
  * Revocable, expiring, unguessable read-only links (requirements sections 18
  * and 19). `tokenHash` is stored rather than the token so a database dump does
  * not hand out working links. Privacy choices are stored with the link and

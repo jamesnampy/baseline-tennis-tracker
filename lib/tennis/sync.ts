@@ -6,9 +6,13 @@
  * and never the other way round. Nothing here can change the local event order —
  * it only reads `match.events` and advances a cursor.
  *
- * Sync is opt-in and off until the user turns it on and supplies the shared
- * access token, matching section 17: device-local records are not exposed to a
- * hosted API unless the user explicitly enables an upload capability.
+ * Sync is opt-in and off until the user turns it on and signs in, matching
+ * section 17: device-local records are not exposed to a hosted API unless the
+ * user explicitly enables an upload capability.
+ *
+ * No credential is stored on the device. Signing in exchanges the account
+ * password for an HttpOnly session cookie the browser holds and no script —
+ * including this one — can read.
  *
  * The push is an outbox, not a request/response: it is safe to call after every
  * save, safe to call while offline, and safe to replay. Events carry
@@ -25,6 +29,11 @@ export interface SyncSettings {
   enabled: boolean;
   /** Empty means the same origin the app is served from. */
   endpoint: string;
+  /**
+   * Optional bearer token, for pointing the app at an endpoint on another
+   * origin where a cookie would not be sent. Same-origin deployments — the
+   * normal case — leave this empty and rely on the session cookie.
+   */
   token: string;
 }
 
@@ -47,7 +56,7 @@ export function loadSyncSettings(): SyncSettings {
 
 export function saveSyncSettings(settings: SyncSettings): SyncSettings {
   const cleaned: SyncSettings = {
-    enabled: settings.enabled && Boolean(settings.token.trim()),
+    enabled: settings.enabled,
     endpoint: settings.endpoint.trim().replace(/\/$/, ""),
     token: settings.token.trim(),
   };
@@ -86,6 +95,47 @@ export function pendingEventCount(match: MatchRecord, state?: MatchSyncState): n
   return Math.max(0, match.events.length - (state?.syncedCount ?? 0));
 }
 
+/**
+ * `credentials: "include"` so the session cookie travels even when the endpoint
+ * is configured as an absolute same-origin URL. The bearer header is added only
+ * when a token was explicitly configured for a cross-origin endpoint.
+ */
+function authHeaders(settings: SyncSettings, extra: Record<string, string> = {}): Record<string, string> {
+  return settings.token ? { ...extra, authorization: `Bearer ${settings.token}` } : extra;
+}
+
+export interface SessionStatus {
+  configured: boolean;
+  authenticated: boolean;
+}
+
+/** Whether this deployment has a password set, and whether this browser is signed in. */
+export async function sessionStatus(settings: SyncSettings = loadSyncSettings()): Promise<SessionStatus> {
+  try {
+    const response = await fetch(`${settings.endpoint}/api/v1/session`, { credentials: "include" });
+    if (!response.ok) return { configured: false, authenticated: false };
+    return (await response.json()) as SessionStatus;
+  } catch {
+    return { configured: false, authenticated: false };
+  }
+}
+
+export async function signIn(password: string, settings: SyncSettings = loadSyncSettings()): Promise<void> {
+  const response = await fetch(`${settings.endpoint}/api/v1/session`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ password }),
+  });
+  if (response.ok) return;
+  const detail = await response.json().catch(() => ({})) as { error?: string };
+  throw new Error(detail.error ?? "Could not sign in.");
+}
+
+export async function signOut(settings: SyncSettings = loadSyncSettings()): Promise<void> {
+  await fetch(`${settings.endpoint}/api/v1/session`, { method: "DELETE", credentials: "include" }).catch(() => undefined);
+}
+
 function profilesForMatch(match: MatchRecord, players: PlayerProfile[]) {
   const ids = new Set([match.config.myPlayerId, match.config.opponentId].filter(Boolean));
   return players
@@ -116,7 +166,7 @@ export async function pushMatch(
   settings: SyncSettings = loadSyncSettings(),
   cursors: SyncCursorStore = indexedDbCursors,
 ): Promise<SyncReport> {
-  if (!settings.enabled || !settings.token) {
+  if (!settings.enabled) {
     return { matchId: match.id, outcome: "disabled", pushed: 0, pending: 0 };
   }
   const state = await cursors.load(match.id);
@@ -146,12 +196,13 @@ export async function pushMatch(
   try {
     const response = await fetch(`${settings.endpoint}/api/v1/sync`, {
       method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${settings.token}` },
+      credentials: "include",
+      headers: authHeaders(settings, { "content-type": "application/json" }),
       body: JSON.stringify(body),
     });
     if (!response.ok) {
       const error = response.status === 401
-        ? "The access token was rejected."
+        ? "Signed out. Sign in again to resume syncing."
         : response.status === 503
           ? "Cloud sync is not enabled on the server."
           : `The server returned ${response.status}.`;
@@ -189,7 +240,7 @@ export async function flushOutbox(
   settings: SyncSettings = loadSyncSettings(),
   cursors: SyncCursorStore = indexedDbCursors,
 ): Promise<SyncReport[]> {
-  if (!settings.enabled || !settings.token) return [];
+  if (!settings.enabled) return [];
   const reports: SyncReport[] = [];
   const ordered = [...matches].sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
   for (const match of ordered) {
@@ -229,7 +280,8 @@ export async function createShareLink(
 ): Promise<ShareLinkResponse> {
   const response = await fetch(`${settings.endpoint}/api/v1/matches/${matchId}/share`, {
     method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${settings.token}` },
+    credentials: "include",
+    headers: authHeaders(settings, { "content-type": "application/json" }),
     body: JSON.stringify(request),
   });
   if (!response.ok) throw new Error(`Could not create the link (${response.status}).`);
@@ -247,7 +299,8 @@ export interface ShareLink {
 
 export async function listShareLinks(matchId: string, settings: SyncSettings = loadSyncSettings()): Promise<ShareLink[]> {
   const response = await fetch(`${settings.endpoint}/api/v1/matches/${matchId}/share`, {
-    headers: { authorization: `Bearer ${settings.token}` },
+    credentials: "include",
+    headers: authHeaders(settings),
   });
   if (!response.ok) throw new Error(`Could not list links (${response.status}).`);
   const body = (await response.json()) as { links: ShareLink[] };
@@ -257,7 +310,8 @@ export async function listShareLinks(matchId: string, settings: SyncSettings = l
 export async function revokeShareLink(id: string, settings: SyncSettings = loadSyncSettings()): Promise<void> {
   const response = await fetch(`${settings.endpoint}/api/v1/share/${id}`, {
     method: "DELETE",
-    headers: { authorization: `Bearer ${settings.token}` },
+    credentials: "include",
+    headers: authHeaders(settings),
   });
   if (!response.ok) throw new Error(`Could not revoke the link (${response.status}).`);
 }
