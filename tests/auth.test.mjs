@@ -5,6 +5,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  MAX_SUPPORTED_ITERATIONS,
+  PBKDF2_ITERATIONS,
   clearedSessionCookie,
   constantTimeEquals,
   hashPassword,
@@ -103,4 +105,23 @@ test("comparison rejects length mismatches and differing content", () => {
 
 test("the minimum password length is long enough to be worth throttling", () => {
   assert.ok(MIN_PASSWORD_LENGTH >= 12);
+});
+
+test("the work factor stays inside what Workers will actually run", async () => {
+  // Production rejected 210,000 with "iteration counts above 100000 are not
+  // supported". Node has no such limit, so only an explicit bound catches it.
+  assert.ok(PBKDF2_ITERATIONS <= MAX_SUPPORTED_ITERATIONS, "Workers refuses PBKDF2 above 100,000 iterations");
+  assert.equal(MAX_SUPPORTED_ITERATIONS, 100_000);
+
+  // Round-trip at the real cost, not the cheap one the other tests use.
+  const stored = await hashPassword("correct horse battery staple");
+  assert.ok(stored.startsWith(`pbkdf2$${PBKDF2_ITERATIONS}$`));
+  assert.equal(await verifyPassword("correct horse battery staple", stored), true);
+});
+
+test("a hash demanding more work than the runtime allows is refused, not thrown", async () => {
+  // Such a hash can never be verified here, so it must fail closed rather than
+  // escaping as an exception and turning every login into a 500.
+  const unusable = `pbkdf2$${MAX_SUPPORTED_ITERATIONS + 1}$c2FsdHNhbHRzYWx0c2E=$aGFzaGhhc2hoYXNoaGFzaGhhc2hoYXNoaGFzaA==`;
+  assert.equal(await verifyPassword("anything", unusable), false);
 });

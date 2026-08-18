@@ -13,8 +13,18 @@
 
 const encoder = new TextEncoder();
 
-/** OWASP's floor for PBKDF2-HMAC-SHA256. Also the login endpoint's rate limit. */
-export const PBKDF2_ITERATIONS = 210_000;
+/**
+ * Workers' WebCrypto refuses PBKDF2 above 100,000 iterations:
+ *
+ *   NotSupportedError: Pbkdf2 failed: iteration counts above 100000 are not
+ *   supported (requested 210000).
+ *
+ * So this is the platform ceiling, not a chosen number, and it is below the
+ * OWASP recommendation for PBKDF2-HMAC-SHA256. The per-IP login throttle and
+ * the minimum password length carry the rest of the weight.
+ */
+export const MAX_SUPPORTED_ITERATIONS = 100_000;
+export const PBKDF2_ITERATIONS = MAX_SUPPORTED_ITERATIONS;
 export const SESSION_COOKIE = "baseline_session";
 export const MIN_PASSWORD_LENGTH = 12;
 /** Failed logins allowed per IP inside the throttle window. */
@@ -63,17 +73,16 @@ export async function verifyPassword(password: string, stored: string): Promise<
   const parts = stored.split("$");
   if (parts.length !== 4 || parts[0] !== "pbkdf2") return false;
   const iterations = Number(parts[1]);
-  if (!Number.isInteger(iterations) || iterations < 1000) return false;
-  let salt: Uint8Array;
-  let expected: string;
+  // Too low is a downgrade attempt; too high is a hash this runtime cannot
+  // verify at all, and would otherwise throw out of the request.
+  if (!Number.isInteger(iterations) || iterations < 1000 || iterations > MAX_SUPPORTED_ITERATIONS) return false;
   try {
-    salt = fromBase64(parts[2]!);
-    expected = parts[3]!;
+    const salt = fromBase64(parts[2]!);
+    const actual = toBase64(await pbkdf2(password, salt, iterations));
+    return constantTimeEquals(actual, parts[3]!);
   } catch {
     return false;
   }
-  const actual = toBase64(await pbkdf2(password, salt, iterations));
-  return constantTimeEquals(actual, expected);
 }
 
 /**

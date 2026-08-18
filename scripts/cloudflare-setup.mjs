@@ -22,8 +22,8 @@ const WRANGLER_CONFIG = "wrangler.jsonc";
 const DATABASE_NAME = "baseline-tennis-tracker";
 const PLACEHOLDER = "REPLACE_WITH_D1_DATABASE_ID";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-// Must match worker/api/auth.ts.
-const PBKDF2_ITERATIONS = 210_000;
+// Must match worker/api/auth.ts. Workers' WebCrypto rejects anything above this.
+const PBKDF2_ITERATIONS = 100_000;
 const MIN_PASSWORD_LENGTH = 12;
 
 const dryRun = process.argv.includes("--dry-run");
