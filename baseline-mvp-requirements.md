@@ -721,11 +721,12 @@ The click-through contains illustrative data and does not persist matches. The p
 
 **Requested:** pull tournament, match, and opponent data for the tracked player from USTA, using the account holder's credentials and the player's USTA ID, so match setup is populated rather than retyped.
 
-**Status: analysed, not scheduled.** `docs/usta-data-integration.md` holds the full analysis. Summary:
+**Status: analysed, not scheduled.** `docs/usta-data-integration.md` holds the full analysis, covering USTA and Universal Tennis as routes to the same data. Summary:
 
 - A USTA API exists (USTA Connect) and carries the required data, but access is a vetted commercial partnership, not available to individuals, and its documentation is behind a login.
 - Scraping the public site is prohibited by USTA's Terms of Use.
 - Driving the site with the account holder's own credentials is also automated access, would reintroduce third-party credential storage that the authentication design deliberately removed, and may not reach the data at all — USTA displays results only for players thirteen or older with their own profile.
+- Universal Tennis is the more promising route: it imports junior tournament results at scale, publishes a developer application with a stated fee, and authorises through the player linking their own account rather than through stored credentials. Whether its read side exposes match history or only ratings and profile is the open question, and it is answerable from public documentation before any fee is paid.
 
 If access is ever granted, the integration must satisfy:
 

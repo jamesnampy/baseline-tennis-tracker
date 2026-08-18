@@ -1,4 +1,6 @@
-# USTA data integration — feasibility analysis
+# Tournament data integration — feasibility analysis
+
+Covers USTA and Universal Tennis (UTR) as routes to the same junior tournament data.
 
 **Status:** Analysis only. Nothing is built, and nothing should be built until the decisions at the end are made.
 **Date:** 2026-08-18
@@ -6,7 +8,7 @@
 
 ## 1. The finding in one paragraph
 
-A USTA API exists and carries exactly the data this would need. It is not available to individuals. Access is a vetted commercial partnership, the documentation is behind a login, and the two obvious workarounds — scraping the public site, or driving it with the parent's own credentials — are both prohibited by USTA's Terms of Use. There is a legitimate path, but it starts with an email to USTA rather than with code.
+A USTA API exists and carries exactly the data this would need. It is not available to individuals: access is a vetted commercial partnership, the documentation is behind a login, and the two obvious workarounds — scraping the public site, or driving it with the parent's own credentials — are both prohibited by USTA's Terms of Use. The more promising route is not USTA at all but Universal Tennis, which holds much of the same junior tournament data, publishes an application path with a stated fee, and authorises through the player linking their own account rather than through stored credentials. Either way this starts with an application, not with code.
 
 ## 2. What USTA actually offers
 
@@ -45,7 +47,36 @@ It should not be built, for three independent reasons.
 
 **The account may not expose the data anyway.** USTA's help centre states that results are displayed only for players thirteen or older who have their own profile. If the tracked player is under that threshold, the pages a parent login can reach may not contain the match history at all.
 
-## 4. Paths that remain open
+## 4. The other door: Universal Tennis (UTR)
+
+USTA is not the only holder of this data. UTR imports tournament results at scale — its database is described as over eight million matches across 200+ countries, growing weekly — and that intake includes junior tournament results. If the tracked player has a UTR profile, the same matches may be reachable without going through USTA at all.
+
+UTR is a materially better prospect than USTA Connect for four reasons.
+
+**There is a published application path, with a price.** A developer application, agreement to API terms, and an API key on approval. Applicants without the stated prerequisites pay a $250 non-refundable application fee. A number with a form attached is a very different proposition from an invitation-only programme reached by email.
+
+**The stated criteria are closer to what Baseline is.** UTR asks for a recognised club, academy, software platform, governing body, or match-play application with a stable user base. Baseline is plausibly a match-play application. "Stable user base" remains the same hurdle it is at USTA, and should not be glossed over — but the category fits.
+
+**The authorisation model is the right one.** The Engage API works by the player linking their own UTR account to the third-party platform, after which the platform may call endpoints on their behalf. That is delegated consent, not credential sharing: Baseline would never see or store a UTR password, which is the same principle the session-cookie design already follows. This is the single most important difference from the credential-automation idea, and it is what makes UTR worth pursuing where that idea was not.
+
+**It is documented.** Swagger documentation is published, and partners are rate limited to 1,000 requests per minute — a figure far beyond anything this application would need.
+
+### The open question
+
+Public descriptions of the Engage API consistently mention retrieving **player ratings and extended profile information**, and **posting** results — both unverified and verified — so that off-platform matches contribute to a player's rating. Whether the read side returns full **match history** is not confirmed by any public description found.
+
+That single question determines whether UTR solves the stated problem or only part of it:
+
+- If match history is readable, this is the answer, and it likely covers USTA-sanctioned junior results by way of UTR's import pipeline.
+- If only ratings and profile are readable, UTR gives opponent identity and strength but not the draw or the match record, and the setup-population problem is only half solved.
+
+It is answerable without applying: the Swagger documentation is public. That check should happen before the fee is paid.
+
+### A note on direction
+
+The Engage API's emphasis on *posting* results is worth noticing, because it points at a capability Baseline is unusually well placed to offer. Baseline already holds a lossless, auditable event log of every match it tracks. Contributing verified results back to a player's UTR rating is a natural fit, and a partner application that offers to *contribute* data is a stronger application than one that only asks to consume it.
+
+## 5. Paths that remain open
 
 **A. Apply for USTA Connect.** One email to `ustaconnect@usta.com` describing the application and what data is needed. Cost is minutes. Expected outcome is a decline, but a decline is itself valuable: it converts an open question into a settled one, and USTA may describe a lighter-weight option that is not publicly documented.
 
@@ -55,7 +86,7 @@ It should not be built, for three independent reasons.
 
 **D. User-supplied import.** The user pastes what they already have — a tournament URL, a draw, a results page they are looking at — and Baseline parses the pasted content. Baseline never contacts USTA, so no term is engaged. This is the only option available today with no external dependency.
 
-## 5. What is already solved
+## 6. What is already solved
 
 Some of the stated pain is smaller than it appears.
 
@@ -64,7 +95,7 @@ Some of the stated pain is smaller than it appears.
 
 So the data model already anticipates this integration. What is missing is population, not structure.
 
-## 6. If access is ever granted
+## 7. If access is ever granted
 
 The work would be a provider behind a seam, mirroring how the strategy provider is isolated:
 
@@ -75,17 +106,24 @@ The work would be a provider behind a seam, mirroring how the strategy provider 
 
 None of this should be built speculatively. The interface shape depends on the schemas, and the schemas are behind the login.
 
-## 7. Decisions needed before any build
+## 8. Decisions needed before any build
 
 1. **Send the partnership email?** Recommended, because it is cheap and it resolves the question.
 2. **Is the tracked player thirteen or older with their own USTA profile?** Determines whether any credential-based path could have worked, and whether a personal data request would return match history.
 3. **Is option D worth building on its own?** A paste-and-parse importer has real value and no external dependency, but it is a different feature from what was asked for, and it should be scoped separately rather than treated as a consolation version of the API.
 
-## 8. Recommendation
+## 9. Recommendation
 
-Do not build automated USTA access. Send the partnership email, note the Innovation Challenge for 2027, and keep collecting data manually in the meantime — the profile reuse already removes most of the repetition.
+Do not build automated USTA access, and do not build anything that stores a USTA or UTR password.
 
-If the manual setup is still the friction point after a few tournaments, scope option D as its own requirement. It is the only version of this that is available today, and it is honest about what it is: a parser for data the user hands over, not a client for a service that has not granted access.
+In order:
+
+1. **Read the UTR Swagger documentation** and settle whether match history is readable. Costs nothing, and decides whether the rest is worth pursuing.
+2. **If it is, apply to UTR.** The $250 fee is the real decision point; the application is more credible if it offers to contribute tracked results back, which Baseline is well placed to do.
+3. **Send the USTA partnership email in parallel.** Costs minutes, and a decline settles the question.
+4. **Keep entering matches manually meanwhile.** Profile reuse already means an opponent is typed once, not once per match.
+
+If setup is still the friction point after a few tournaments, scope the user-supplied paste importer as its own requirement. It is the only version available today with no external dependency, and it should be judged on its own merits rather than as a consolation for access not granted.
 
 ## Sources
 
@@ -94,3 +132,7 @@ If the manual setup is still the friction point after a few tournaments, scope o
 - [USTA Terms of Use](https://www.usta.com/en/home/about-usta/who-we-are/national/usta-terms-of-use.html)
 - [The USTA Connect Innovation Challenge](https://www.usta.com/en/home/about-usta/usta-connect/the-usta-connect-innovation-challenge.html)
 - [The Player Profile Results and Rankings Tab](https://customercare.usta.com/hc/en-us/articles/10039302404756-The-Player-Profile-Results-and-Rankings-Tab)
+- [UTR Sports API Developer Application](https://www.utrsports.net/pages/api-developer-application)
+- [UTR Sports Engage API](https://www.utrsports.net/pages/engage-api)
+- [UTR Sports Engage API Documentation](https://www.utrsports.net/pages/engage-api-documentation)
+- [UTR Sports launches Engage API](https://finance.yahoo.com/news/utr-sports-launches-engage-api-203800174.html)
