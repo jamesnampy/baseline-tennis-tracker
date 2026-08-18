@@ -194,6 +194,7 @@ Each degradation is deliberate, so a partial deployment is a reduced app rather 
 - `scripts/` — Cloudflare provisioning and deploy helpers
 - `tests/` — automated scoring-format and edge-case coverage
 - `baseline-mvp-requirements.md` — canonical functional requirements
+- `docs/` — analyses behind requirement decisions
 - `baseline-clickthrough.html` — canonical interaction reference
 
 ## Data principles

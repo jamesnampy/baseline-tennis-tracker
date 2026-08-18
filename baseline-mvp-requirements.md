@@ -705,7 +705,7 @@ Outstanding, in the order they are likely to matter:
 - Cross-match export in a single request
 - Tournament, season, and opponent trend analysis
 - Advanced profile merge suggestions and duplicate-player detection
-- Automated USTA tournament metadata import when permitted
+- Automated USTA tournament metadata import when permitted — **blocked, see section 23**
 - Apple Watch input
 - Native iOS packaging or SwiftUI client
 - Video synchronization and court-placement diagrams
@@ -716,3 +716,23 @@ Outstanding, in the order they are likely to matter:
 `baseline-clickthrough.html` is the canonical MVP experience reference for layout, terminology, control grouping, point-entry order, mobile touch sizing, live-stat presentation, timeline presentation, and on-demand strategy review.
 
 The click-through contains illustrative data and does not persist matches. The production implementation must follow this specification when prototype behavior and underlying data integrity differ.
+
+## 23. USTA data import
+
+**Requested:** pull tournament, match, and opponent data for the tracked player from USTA, using the account holder's credentials and the player's USTA ID, so match setup is populated rather than retyped.
+
+**Status: analysed, not scheduled.** `docs/usta-data-integration.md` holds the full analysis. Summary:
+
+- A USTA API exists (USTA Connect) and carries the required data, but access is a vetted commercial partnership, not available to individuals, and its documentation is behind a login.
+- Scraping the public site is prohibited by USTA's Terms of Use.
+- Driving the site with the account holder's own credentials is also automated access, would reintroduce third-party credential storage that the authentication design deliberately removed, and may not reach the data at all — USTA displays results only for players thirteen or older with their own profile.
+
+If access is ever granted, the integration must satisfy:
+
+- Imports run server-side; no USTA credential is ever stored on the device.
+- Imported events carry `source: "imported"`, so imported and courtside-tracked data remain distinguishable in every projection, statistic, and export.
+- Imported opponents map to existing `PlayerProfile` records, or create guest profiles linked later through identity-mapping records. Import never rewrites historical events or match IDs.
+- The importer sits behind an interface with at least two implementations, so a user-supplied paste importer and a hosted API importer are interchangeable and neither is assumed.
+- Import is user-initiated and its coverage contribution is disclosed like any other data source.
+
+A user-supplied import — the user pastes a page or URL they are already looking at, and Baseline parses it without contacting USTA — is the only form available today. It is a separate requirement and should be scoped on its own merits, not as a substitute for the above.
