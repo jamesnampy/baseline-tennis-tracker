@@ -489,6 +489,10 @@ Live statistics compare both players and update after every event.
 - Shot-type and advanced shot-type outcomes
 - Points won by rally-length range
 
+Statistics can be scoped to the whole match, to each recorded set, and to a deciding match tiebreak
+where the format allows one. Every displayed score, serve, return, shot-quality, and coverage value
+uses the selected scope.
+
 **Pending — metrics specified above but not computed.** Holds and breaks; service games held and
 broken; first-serve return points won; second-serve return points won. Nothing in the statistics
 projection accumulates them.
@@ -724,6 +728,11 @@ The self-contained HTML report can be created from device-local data without upl
 
 A shared report is an immutable snapshot of the selected dataset and privacy choices. Regenerating analysis or correcting the match creates a new report version and marks older versions as out of date; it does not silently change what a coach previously reviewed.
 
+**Pending — the report is whole-match only.** The Stats screen scopes to the whole match, each set,
+and a deciding match tiebreak; the report has no equivalent and reports every figure across the full
+match. Its statistics should carry the same scopes, and the point timeline should be separable from
+them rather than sitting in the same continuous page.
+
 **Open item:** a report link currently renders the match as it stands when the page is opened, not as it stood when the link was created. Privacy choices are frozen with the link and enforced server-side — the link's own flags overrule the stored report options, so a link can never disclose more than it was created with — but the dataset is not yet frozen. Storing the event cutoff on the link would close this.
 
 ## 19. Privacy
@@ -777,6 +786,8 @@ Delivered since version 1.2, and specified in the sections named:
 - ~~Hosted read-only API access~~ — delivered at `/api/v1`. Section 17.
 - ~~Hosted coach reports~~ — delivered as private pages. Section 18.
 - ~~Account authentication~~ — delivered as a single account password. Section 24.
+- ~~A live link creatable from the Match tab, with a copy control~~ — delivered, and the created URL
+  is remembered on the device so it stays copyable for the rest of the match. Section 26.
 
 Outstanding work, in two tiers. The first comes from tracking real matches and is what the product
 owner is actually waiting on. The second is the standing backlog; items marked *(v2 §n)* were folded
@@ -787,24 +798,24 @@ in from the superseded version 2 draft.
 Recorded while tracking real matches, and ahead of the backlog below. Each is specified in the
 section named.
 
-1. **The live link is created only from the Reports screen**, and its URL is shown once as plain
-   text. It should be creatable from the Match tab during tracking, with a copy control and a native
-   share where the platform offers one. Section 26.
-2. **A match cannot be staged before the toss.** First server is required at setup and cannot be
+1. **A match cannot be staged before the toss.** First server is required at setup and cannot be
    changed later, so setup has to wait until the toss is done. Section 4.
-3. **Ball Landed is not offered on faults**, so the match's most common error never records where it
+2. **Ball Landed is not offered on faults**, so the match's most common error never records where it
    landed. Section 8.
-4. **Ball Landed is reported nowhere.** It should appear as two breakdowns — serve errors, and every
+3. **Ball Landed is reported nowhere.** It should appear as two breakdowns — serve errors, and every
    other error. Section 11.
-5. **Holds and breaks, and service games held and broken**, are specified and not computed.
+4. **Holds and breaks, and service games held and broken**, are specified and not computed.
    Section 11.
-6. **First-serve and second-serve return points won** are specified and not computed. Section 11.
-7. **No end-of-game mental-state reminder**, and an observation recorded between points is not linked
+5. **First-serve and second-serve return points won** are specified and not computed. Section 11.
+6. **No end-of-game mental-state reminder**, and an observation recorded between points is not linked
    to the point it followed. Section 9.
-8. **Points won by rally-length range** reaches the coach report but not the Stats screen.
+7. **Points won by rally-length range** reaches the coach report but not the Stats screen.
    Section 11.
-9. **Serve attempt and result do not appear on the timeline row**, nor does the player a shot was
+8. **Serve attempt and result do not appear on the timeline row**, nor does the player a shot was
    attributed to. Section 13.
+9. **The coach report has no scopes.** Its statistics are whole-match only, while the Stats
+   screen offers the whole match, each set, and a deciding match tiebreak. The report should carry
+   the same scopes, with the point timeline separable from them. Sections 11 and 18.
 
 ### Later
 
@@ -943,13 +954,16 @@ Reinstate it together with two-way sync, never separately.
 - Replayed events are deduplicated by id.
 - Sharing a match never transfers scoring control.
 
-**Pending — where the link lives.** It can only be created from the Reports screen, which means
-leaving the tracker mid-match, returning to the home screen, and selecting the match. It should be
-creatable from the Match tab while tracking.
+A link can be created from the Match tab while tracking, without leaving the match. That path uses
+fixed conservative defaults — opponent by initials, a day's expiry, timeline included, mental states
+withheld — because choosing between points is the wrong moment for a privacy form. The Reports
+screen keeps the full set of choices.
 
-**Pending — a copy control.** The created URL is rendered once as plain text, so it has to be
-selected by hand on a phone, and it is never shown again. A copy action, and a native share action
-where the platform offers one, are both missing.
+The link is offered with a copy control, and a native share where the platform provides one. Because
+the API returns a token only at creation, the device that created a link remembers its URL, so the
+same link stays copyable for the rest of the match instead of having to be revoked and recreated
+when the first copy is missed. A remembered link the server no longer honours — revoked elsewhere,
+or expired — is discarded rather than offered.
 
 **Retired — named-recipient access** *(v2 §9)*. An unguessable, revocable, expiring token is the
 whole access model. Per-recipient identity would require the account system section 24 retires.

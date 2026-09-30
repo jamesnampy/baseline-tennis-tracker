@@ -17,8 +17,9 @@ import {
 } from "@/lib/tennis/scoring";
 import { deleteMatch, loadIdentityMappings, loadMatches, loadPlayers, loadSyncStates, saveIdentityMapping, saveMatch, savePlayer, type MatchSyncState } from "@/lib/tennis/storage";
 import {
-  createShareLink, flushOutbox, listShareLinks, loadSyncSettings, pendingEventCount,
-  pushMatch, revokeShareLink, saveSyncSettings, sessionStatus, signIn, signOut,
+  copyText, createShareLink, flushOutbox, forgetShareLink, listShareLinks, loadSyncSettings,
+  pendingEventCount, pushMatch, recallShareLink, rememberShareLink, revokeShareLink,
+  saveSyncSettings, sessionStatus, signIn, signOut,
   type SessionStatus, type ShareLink, type ShareLinkResponse, type SyncSettings,
 } from "@/lib/tennis/sync";
 
@@ -271,7 +272,7 @@ function ReportLinkCard({ match, options }: { match: MatchRecord; options: Coach
     <label className="data-select">Link expires after<select value={expiresInHours} onChange={(event) => setExpiresInHours(Number(event.target.value))}><option value={24}>24 hours</option><option value={168}>7 days</option><option value={720}>30 days</option><option value={0}>Until revoked</option></select></label>
     <button disabled={busy} onClick={create}>{busy ? "Publishing…" : "Create report link"}</button>
     {error && <p className="validation-error">{error}</p>}
-    {created && <p className="share-url">{created.url}<small>Copy it now&mdash;the link is shown once.</small></p>}
+    {created && <><input className="share-url" readOnly value={created.url} aria-label="Live link" onFocus={(event) => event.currentTarget.select()} /><button className="live-link-primary" onClick={() => copyText(created.url)}>Copy link</button><p className="fine-print">Also available from the Match tab while you track.</p></>}
     <ShareLinkList links={links} onRevoke={(id) => revokeShareLink(id).then(refresh).catch(() => undefined)} />
   </section>;
 }
@@ -296,7 +297,12 @@ function ShareLinkCard({ match }: { match: MatchRecord }) {
   useEffect(() => { if (enabled) refresh(); }, [match.id, enabled]); // eslint-disable-line react-hooks/exhaustive-deps
   async function create() {
     setBusy(true); setError(""); setCreated(undefined);
-    try { setCreated(await createShareLink(match.id, { kind: "live", opponentDisplay, includeMentalStates, includeTimeline, expiresInHours })); refresh(); }
+    try {
+      const made = await createShareLink(match.id, { kind: "live", opponentDisplay, includeMentalStates, includeTimeline, expiresInHours });
+      // Remembered under the same key the tracker reads, so a link created here
+      // is copyable from the Match tab for the rest of the match.
+      rememberShareLink(match.id, made); setCreated(made); refresh();
+    }
     catch (failure) { setError(failure instanceof Error ? failure.message : "Could not create the link."); }
     setBusy(false);
   }
@@ -485,10 +491,147 @@ function timelineEntries(match: MatchRecord, details: Map<string, PointDetails>)
 }
 
 function TimelineView({ match, points, details }: { match: MatchRecord; points: ReturnType<typeof activePointEvents>; details: Map<string, PointDetails> }) { const entries = useMemo(() => timelineEntries(match, details), [match, details]); return <section className="full-view"><p className="eyebrow">EVERY SAVED POINT</p><h1>Match timeline</h1>{!points.length ? <div className="empty-card"><strong>No points yet</strong><p>Each completed point will appear here with its score context.</p></div> : <div className="timeline">{[...entries].reverse().map((entry) => <article key={entry.id}><div className={`timeline-dot ${entry.dot}`} /><div><p>{entry.eyebrow}</p><h3>{entry.title}</h3><span>{entry.context}</span>{entry.detail && <small>{entry.detail}</small>}</div></article>)}</div>}</section>; }
+/**
+ * The live link, offered inside the tracker (roadmap section 21, Next item 1).
+ *
+ * Creating one used to mean leaving the match, returning to the home screen and
+ * finding the match again, so this puts it where the match already is. The
+ * defaults are deliberately fixed and conservative — initials, a day's expiry,
+ * timeline in, mental states out — because choosing between a point is the wrong
+ * moment for a privacy form. The Reports screen keeps the full set of choices.
+ *
+ * The API returns a token once. This remembers the URL on the device that created
+ * it, so the link can be copied again later in the match instead of having to be
+ * revoked and recreated.
+ */
+function LiveLinkCard({ match }: { match: MatchRecord }) {
+  const [enabled, setEnabled] = useState(false);
+  const [link, setLink] = useState<ShareLinkResponse | undefined>(() => recallShareLink(match.id));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [note, setNote] = useState("");
+  // Read during render rather than held in state: this is a client-only SPA, so
+  // there is no hydration pass for the value to disagree with.
+  const canShare = typeof navigator.share === "function";
+
+  useEffect(() => {
+    sessionStatus().then((state) => setEnabled(state.authenticated)).catch(() => undefined);
+  }, []);
+
+  // A remembered link is only useful while the server still honours it. If it was
+  // revoked from another screen, or has expired, drop it rather than offer a link
+  // that will fail for whoever receives it.
+  useEffect(() => {
+    if (!enabled || !link) return;
+    listShareLinks(match.id)
+      .then((rows) => {
+        if (!rows.some((row) => row.id === link.id && row.active)) {
+          forgetShareLink(match.id);
+          setLink(undefined);
+        }
+      })
+      .catch(() => undefined);
+  }, [enabled, match.id, link]);
+
+  function flash(message: string) {
+    setNote(message);
+    window.setTimeout(() => setNote(""), 2600);
+  }
+
+  async function create() {
+    setBusy(true);
+    setError("");
+    try {
+      const created = await createShareLink(match.id, {
+        kind: "live", opponentDisplay: "initials",
+        includeMentalStates: false, includeTimeline: true, expiresInHours: 24,
+      });
+      rememberShareLink(match.id, created);
+      setLink(created);
+      flash("Link ready");
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "Could not create the link.");
+    }
+    setBusy(false);
+  }
+
+  async function copy() {
+    if (!link) return;
+    flash(await copyText(link.url) ? "Link copied" : "Copy blocked — long-press the link to copy it");
+  }
+
+  async function send() {
+    if (!link) return;
+    if (typeof navigator.share === "function") {
+      try {
+        await navigator.share({
+          title: "Baseline live score",
+          text: `${match.config.myPlayerName} vs. ${match.config.opponentName}`,
+          url: link.url,
+        });
+      } catch {
+        // Dismissed by the user, or the platform refused. Nothing to report.
+      }
+      return;
+    }
+    await copy();
+  }
+
+  async function revoke() {
+    if (!link) return;
+    setBusy(true);
+    try {
+      await revokeShareLink(link.id);
+      forgetShareLink(match.id);
+      setLink(undefined);
+      flash("Link revoked");
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "Could not revoke the link.");
+    }
+    setBusy(false);
+  }
+
+  if (!enabled) {
+    return <section className="live-link-card">
+      <p className="eyebrow">SHARE THE SCORE</p><h2>Live link</h2>
+      <p>Turn on cloud sync and sign in from the Export screen to share a read-only link someone can
+        follow while you track.</p>
+    </section>;
+  }
+
+  return <section className="live-link-card">
+    <p className="eyebrow">SHARE THE SCORE</p><h2>Live link</h2>
+    {!link
+      ? <>
+          <p>A read-only view of this match — score, statistics and timeline. It expires after a day,
+            shows the opponent by initials, withholds mental-state observations, and can be revoked
+            at any time.</p>
+          <div className="live-link-actions">
+            <button className="live-link-primary" disabled={busy} onClick={create}>
+              {busy ? "Creating…" : "Create live link"}
+            </button>
+          </div>
+        </>
+      : <>
+          <p>Updates reach whoever holds this link as you track. The same link works for the rest of
+            the match{link.expiresAt ? `, until ${new Date(link.expiresAt).toLocaleString()}` : ""}.</p>
+          <div className="live-link-actions">
+            <button className="live-link-primary" onClick={copy}>Copy link</button>
+            {canShare && <button className="live-link-send" onClick={send}>Share…</button>}
+          </div>
+          <input className="share-url" readOnly value={link.url} aria-label="Live link"
+            onFocus={(event) => event.currentTarget.select()} />
+          <button className="live-link-revoke" disabled={busy} onClick={revoke}>Revoke this link</button>
+        </>}
+    {note && <p className="live-link-note" role="status">{note}</p>}
+    {error && <p className="validation-error">{error}</p>}
+  </section>;
+}
+
 function MatchView({ match, stats, score, onExport, onGenerate }: { match: MatchRecord; stats: ReturnType<typeof buildStats>; score: ScoreState; onExport: () => void; onGenerate: () => Promise<{ response: string; evidence: string[]; provider: string; model: string }> }) {
   const [review, setReview] = useState<{ response: string; evidence: string[]; provider: string; model: string }>(); const [loading, setLoading] = useState(false);
   async function askForReview() { setLoading(true); const next = await onGenerate(); setReview(next); setLoading(false); }
-  return <section className="full-view"><p className="eyebrow">MATCH CENTER</p><h1>Review & strategy</h1><div className="match-summary"><span><small>FORMAT</small><strong>{FORMAT_RULES[match.config.format].shortLabel}</strong></span><span><small>SCORE</small><strong>{scoreSummary(score, match.config)}</strong></span><span><small>DATA</small><strong>{stats.coverage}% tracked</strong></span></div><div className="strategy-card"><span className="strategy-icon">✦</span><p className="eyebrow">ON-DEMAND REVIEW</p><h2>What should {match.config.myPlayerName} do next?</h2><p>Uses the cumulative score, service, return, shot, rally, and mental-state observations for both players. Match data is sent for analysis only when you tap below.</p><button disabled={loading} onClick={askForReview}>{loading ? "Reviewing the match…" : "Ask AI for strategy"}</button>{review && <div className="strategy-response"><p className="pre-line">{review.response}</p><h3>Evidence used</h3>{review.evidence.length ? <ul>{review.evidence.map((item) => <li key={item}>{item}</li>)}</ul> : <p>More tracked points will produce stronger evidence.</p>}<small>{review.provider === "on-device" ? "On-device evidence review · The hosted model is unavailable or not configured." : `${review.provider} · ${review.model}`} · Dataset cutoff saved in the event log.</small></div>}</div><div className="data-card"><div><h2>Your match data</h2><p>Download a lossless event log plus analysis-ready CSV tables for Codex, Claude, or another tool.</p></div><button onClick={onExport}>Export data ↓</button></div>{match.config.tournamentUrl && <a className="tournament-link" href={match.config.tournamentUrl} target="_blank" rel="noreferrer"><span><small>USTA TOURNAMENT</small><strong>{match.config.tournamentName || "Open tournament page"}</strong></span><b>↗</b></a>}</section>;
+  return <section className="full-view"><p className="eyebrow">MATCH CENTER</p><h1>Review & strategy</h1><div className="match-summary"><span><small>FORMAT</small><strong>{FORMAT_RULES[match.config.format].shortLabel}</strong></span><span><small>SCORE</small><strong>{scoreSummary(score, match.config)}</strong></span><span><small>DATA</small><strong>{stats.coverage}% tracked</strong></span></div><LiveLinkCard match={match} /><div className="strategy-card"><span className="strategy-icon">✦</span><p className="eyebrow">ON-DEMAND REVIEW</p><h2>What should {match.config.myPlayerName} do next?</h2><p>Uses the cumulative score, service, return, shot, rally, and mental-state observations for both players. Match data is sent for analysis only when you tap below.</p><button disabled={loading} onClick={askForReview}>{loading ? "Reviewing the match…" : "Ask AI for strategy"}</button>{review && <div className="strategy-response"><p className="pre-line">{review.response}</p><h3>Evidence used</h3>{review.evidence.length ? <ul>{review.evidence.map((item) => <li key={item}>{item}</li>)}</ul> : <p>More tracked points will produce stronger evidence.</p>}<small>{review.provider === "on-device" ? "On-device evidence review · The hosted model is unavailable or not configured." : `${review.provider} · ${review.model}`} · Dataset cutoff saved in the event log.</small></div>}</div><div className="data-card"><div><h2>Your match data</h2><p>Download a lossless event log plus analysis-ready CSV tables for Codex, Claude, or another tool.</p></div><button onClick={onExport}>Export data ↓</button></div>{match.config.tournamentUrl && <a className="tournament-link" href={match.config.tournamentUrl} target="_blank" rel="noreferrer"><span><small>USTA TOURNAMENT</small><strong>{match.config.tournamentName || "Open tournament page"}</strong></span><b>↗</b></a>}</section>;
 }
 function CompletedView({ match, score, stats, saved, onTab, onExit }: { match: MatchRecord; score: ScoreState; stats: ReturnType<typeof buildStats>; saved: boolean; onTab: (tab: Tab) => void; onExit: () => void }) { return <main className="app-shell completed-screen"><header className="match-bar"><button className="icon-button" onClick={onExit}>×</button><div><span>MATCH COMPLETE</span><strong>{match.config.myPlayerName} vs. {match.config.opponentName}</strong><small className="save-state saved">● {saved ? "Saved on device" : "Saving…"}</small></div><span /></header><section className="completed-hero"><span className="trophy">✓</span><p className="eyebrow">FINAL</p><h1>{playerName(match.config, score.winner ?? "my")} wins</h1><strong>{scoreSummary(score, match.config)}</strong><p>{stats.directlyTrackedPoints} points captured · {stats.coverage}% coverage</p></section><div className="completed-actions"><button onClick={() => onTab("stats")}>View match stats</button><button onClick={() => onTab("match")}>Review strategy</button><button onClick={() => downloadExport(match)}>Export match data</button></div><button className="text-button" onClick={onExit}>Return to matches</button></main>; }
 

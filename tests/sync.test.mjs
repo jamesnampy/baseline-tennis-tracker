@@ -8,6 +8,7 @@ import test, { beforeEach } from "node:test";
 
 import {
   DEFAULT_SYNC_SETTINGS, flushOutbox, loadSyncSettings, pendingEventCount, pushMatch, saveSyncSettings,
+  forgetShareLink, recallShareLink, rememberShareLink,
 } from "../lib/tennis/sync.ts";
 
 const syncStates = new Map();
@@ -56,6 +57,7 @@ beforeEach(() => {
   define("localStorage", {
     getItem: (key) => values.get(key) ?? null,
     setItem: (key, value) => { values.set(key, value); },
+    removeItem: (key) => { values.delete(key); },
   });
   stubFetch();
 });
@@ -161,4 +163,30 @@ test("flushing pushes queued matches oldest first and stops when the connection 
   const offline = await flushOutbox([newer, older], [], [], settings, cursors);
   assert.equal(offline.length, 1);
   assert.equal(offline[0].outcome, "offline");
+});
+
+// A share token is returned once, at creation. The device that created it keeps
+// the URL so the link stays copyable for the rest of the match.
+test("a created link is remembered per match and can be recalled", () => {
+  const link = { id: "link-1", token: "t", url: "https://x.dev/live/t", kind: "live", expiresAt: null, opponentDisplay: "initials", includeMentalStates: false, includeTimeline: true };
+  assert.equal(recallShareLink("match-1"), undefined);
+  rememberShareLink("match-1", link);
+  assert.deepEqual(recallShareLink("match-1"), link);
+  // One match's link never surfaces for another.
+  assert.equal(recallShareLink("match-2"), undefined);
+});
+
+test("a remembered link can be forgotten when it is revoked or expires", () => {
+  const link = { id: "link-2", token: "t2", url: "https://x.dev/live/t2", kind: "live", expiresAt: null, opponentDisplay: "hidden", includeMentalStates: false, includeTimeline: false };
+  rememberShareLink("match-3", link);
+  assert.deepEqual(recallShareLink("match-3"), link);
+  forgetShareLink("match-3");
+  assert.equal(recallShareLink("match-3"), undefined);
+});
+
+test("unreadable stored link data is ignored rather than offered", () => {
+  localStorage.setItem("baseline.livelink.match-4", "not json");
+  assert.equal(recallShareLink("match-4"), undefined);
+  localStorage.setItem("baseline.livelink.match-5", JSON.stringify({ token: "t" }));
+  assert.equal(recallShareLink("match-5"), undefined, "a record with no url or id is not a link");
 });

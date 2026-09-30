@@ -315,3 +315,63 @@ export async function revokeShareLink(id: string, settings: SyncSettings = loadS
   });
   if (!response.ok) throw new Error(`Could not revoke the link (${response.status}).`);
 }
+
+const LINK_KEY_PREFIX = "baseline.livelink.";
+
+/**
+ * A share token is returned once, at creation. Remembering the URL on the device
+ * that created it lets the tracker offer the same link for the rest of the match,
+ * instead of forcing a revoke-and-recreate when the first copy is missed. Nothing
+ * new leaves the device: it already holds the match this link points at.
+ */
+export function rememberShareLink(matchId: string, link: ShareLinkResponse): void {
+  try {
+    localStorage.setItem(LINK_KEY_PREFIX + matchId, JSON.stringify(link));
+  } catch {
+    // Private browsing can refuse writes. The link still works for this session.
+  }
+}
+
+export function recallShareLink(matchId: string): ShareLinkResponse | undefined {
+  try {
+    const raw = localStorage.getItem(LINK_KEY_PREFIX + matchId);
+    if (!raw) return undefined;
+    const parsed = JSON.parse(raw) as ShareLinkResponse;
+    return typeof parsed?.url === "string" && typeof parsed?.id === "string" ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function forgetShareLink(matchId: string): void {
+  try {
+    localStorage.removeItem(LINK_KEY_PREFIX + matchId);
+  } catch {
+    // Nothing to do; the caller has already dropped it from state.
+  }
+}
+
+/** Copies through the async clipboard, falling back to a hidden selection. */
+export async function copyText(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    // Older WebViews, and any context the clipboard API considers insecure.
+  }
+  try {
+    const field = document.createElement("textarea");
+    field.value = text;
+    field.setAttribute("readonly", "true");
+    field.style.position = "fixed";
+    field.style.opacity = "0";
+    document.body.appendChild(field);
+    field.select();
+    field.setSelectionRange(0, text.length);
+    const copied = document.execCommand("copy");
+    document.body.removeChild(field);
+    return copied;
+  } catch {
+    return false;
+  }
+}
