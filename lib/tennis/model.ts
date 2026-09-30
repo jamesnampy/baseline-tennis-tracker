@@ -1,5 +1,5 @@
 /** Bumped whenever the exported dataset shape changes. Exports and reports must agree. */
-export const DATASET_VERSION = "baseline-mvp-1.2.2";
+export const DATASET_VERSION = "baseline-mvp-1.3.0";
 
 export type PlayerKey = "my" | "opponent";
 export type PlayerRole = "my_player" | "opponent" | "guest";
@@ -117,7 +117,8 @@ export interface PointDetails {
   benefitingPlayer?: PlayerKey;
   finalStrokePlayer?: PlayerKey;
   /**
-   * Where a fault landed, per attempt. A point has at most one of each, and both
+   * Where a fault landed, per attempt. Added in dataset 1.3.0; absent on points
+   * recorded before it, which is not the same as a fault that landed nowhere. A point has at most one of each, and both
    * are attributed to the server. Kept apart from `ballLanding`, which describes
    * the shot that ended a rally: a serve into the net and a groundstroke into the
    * net are different mistakes and are reported separately.

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { applyPoint, derivedCompletions, initialScore, numberedPointEvents, pointGameNumber, pointScoreLabel, pointSetNumber, projectScore } from "../lib/tennis/scoring.ts";
-import { eligiblePointOutcomes, hasCompleteShotDetails, isErrorOutcome, isPointOutcomeValid, pointDetailsPlayer, usesAdvancedShotOptions, usesBallLandingOptions } from "../lib/tennis/model.ts";
+import {DATASET_VERSION, eligiblePointOutcomes, hasCompleteShotDetails, isErrorOutcome, isPointOutcomeValid, pointDetailsPlayer, usesAdvancedShotOptions, usesBallLandingOptions } from "../lib/tennis/model.ts";
 import { buildStats, filterEventsForStatsScope, pointStatsScope, shotImpact, statsScopeOptions} from "../lib/tennis/analytics.ts";
 import { buildPressureAnalytics } from "../lib/tennis/pressure.ts";
 import { createPlayerProfile, linkPlayerIdentity, playerProfileAnalytics, versionPlayerProfile } from "../lib/tennis/profiles.ts";
@@ -94,7 +94,7 @@ test("analysis ZIP contains complete vendor-neutral files and API contract", () 
 test("coach report respects privacy options and remains self-contained", () => {
   const match=fixtureMatch(); match.config.tournamentName="Private event"; match.config.tournamentUrl="https://example.com/private";
   const html = buildCoachReport(match, {opponentIdentity:false,matchStats:false,timeline:false,mentalStates:false,mentalNotes:false,recommendations:false});
-  assert.match(html,/noindex,nofollow/); assert.doesNotMatch(html,/Noah/); assert.doesNotMatch(html,/Point timeline|Match stats|https:\/\//); assert.match(html,/dataset baseline-mvp-1.2/);
+  assert.match(html,/noindex,nofollow/); assert.doesNotMatch(html,/Noah/); assert.doesNotMatch(html,/Point timeline|Match stats|https:\/\//); assert.ok(html.includes(`dataset ${DATASET_VERSION}`), "the report states the dataset version");
 });
 
 test("advanced stats break shot types into errors and winner patterns", () => {
@@ -273,7 +273,7 @@ test("the export bundle publishes derived game, set, status, and review tables",
   for (const name of ["games.csv", "sets.csv", "match_status.csv", "strategy_reviews.csv"]) assert.ok(name in bundle.files, name);
   assert.match(bundle.files["games.csv"], /game-1/); assert.match(bundle.files["sets.csv"], /set-1/);
   assert.match(bundle.files["points.csv"], /set_number/); assert.match(bundle.files["points.csv"], /game_number/);
-  assert.match(bundle.files["manifest.json"], /baseline-mvp-1\.2\.2/);
+  assert.ok(bundle.files["manifest.json"].includes(DATASET_VERSION), 'the export states the dataset version');
 });
 
 test("stroke impact subtracts errors instead of counting every observation", () => {
