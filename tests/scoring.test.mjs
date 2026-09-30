@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { applyPoint, derivedCompletions, initialScore, numberedPointEvents, pointGameNumber, pointScoreLabel, pointSetNumber, projectScore } from "../lib/tennis/scoring.ts";
 import { eligiblePointOutcomes, hasCompleteShotDetails, isErrorOutcome, isPointOutcomeValid, pointDetailsPlayer, usesAdvancedShotOptions, usesBallLandingOptions } from "../lib/tennis/model.ts";
-import { buildStats, filterEventsForStatsScope, pointStatsScope, shotImpact } from "../lib/tennis/analytics.ts";
+import { buildStats, filterEventsForStatsScope, pointStatsScope, shotImpact, statsScopeOptions} from "../lib/tennis/analytics.ts";
 import { buildPressureAnalytics } from "../lib/tennis/pressure.ts";
 import { createPlayerProfile, linkPlayerIdentity, playerProfileAnalytics, versionPlayerProfile } from "../lib/tennis/profiles.ts";
 import { buildExportBundle, staleStrategyEventIds, zipFiles } from "../lib/tennis/export.ts";
@@ -457,4 +457,39 @@ test("serve errors and rally errors are reported as separate landing breakdowns"
   assert.deepEqual(stats.my.serveErrorLanding, { net: 1, long: 0, side: 1 });
   assert.deepEqual(stats.opponent.rallyErrorLanding, { net: 0, long: 0, side: 0 }, "the receiver made neither error");
   assert.deepEqual(stats.opponent.serveErrorLanding, { net: 0, long: 0, side: 0 });
+});
+
+test("the coach report scopes its statistics and separates the timeline", () => {
+  // Two straight sets: 6 games of 4 points each, twice.
+  const match = matchFrom(Array.from({ length: 48 }, () => "my"));
+  const html = buildCoachReport(match);
+  for (const marker of ['data-panel="panel-statistics"', 'data-panel="panel-timeline"', 'data-panel="panel-analysis"',
+                        'data-scope="scope-total"', 'data-scope="scope-set-1"', 'data-scope="scope-set-2"',
+                        'id="scope-total"', 'id="panel-timeline"']) {
+    assert.ok(html.includes(marker), marker);
+  }
+  assert.ok(html.includes("Match statistics"));
+  assert.ok(html.includes("Shot analytics"));
+  assert.ok(html.includes("Point timeline"));
+  // Exactly one scope panel starts visible, and one top-level panel.
+  assert.equal((html.match(/class="scope-panel on"/g) ?? []).length, 1);
+  assert.equal((html.match(/class="panel on"/g) ?? []).length, 1);
+  // Printing must not hide anything behind a tab.
+  assert.ok(html.includes(".panel,.scope-panel{display:block!important}"));
+  // Self-contained: no external stylesheet, script, or image.
+  assert.doesNotMatch(html, /src="http|href="http/);
+});
+
+test("a report with no tracked points still renders, with no empty scopes", () => {
+  const match = matchFrom([]);
+  const html = buildCoachReport(match);
+  assert.doesNotMatch(html, /data-scope="scope-set-1"/, "an unplayed set is never offered");
+  assert.ok(html.includes("No points recorded."));
+});
+
+test("scopes offered by the report match the ones the Stats screen offers", () => {
+  const match = matchFrom(Array.from({ length: 24 }, () => "my"));
+  // The tracker also offers the set in progress; the report only what was played.
+  assert.deepEqual(statsScopeOptions(match.events, match.config, false).map((o) => o.id), ["total", "set_1"]);
+  assert.deepEqual(statsScopeOptions(match.events, match.config).map((o) => o.id), ["total", "set_1", "set_2"]);
 });

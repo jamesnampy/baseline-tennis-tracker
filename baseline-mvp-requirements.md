@@ -130,9 +130,11 @@ Required setup fields:
 - First server
 - Ad scoring switch
 
-**Pending — staging a match before the toss.** First server is a required setup field and cannot be
-changed afterwards, so a match cannot be prepared until the toss is over. Setup should be completable
-without it, with the first server chosen in the tracker immediately before the first point.
+First server can be set during setup or left until the toss. The serve screen offers the choice until
+the first point is saved, so a match can be staged in advance. Until a point exists there is nothing
+to re-score, so the change amends the match configuration and appends an `event_corrected` against
+`match_created` rather than rewriting that event's snapshot: the log stays immutable and the change
+stays auditable.
 
 Optional setup fields:
 
@@ -369,9 +371,11 @@ Choices:
 - Long
 - Side
 
-**Pending — ball landed on faults.** A first or second fault records no landing, so the most common
-error in the match is the one error whose placement is never captured. Ball Landed should be
-offered on both faults, attributed to the server.
+Ball Landed is also offered on faults, attributed to the server, and required neither time. The
+first fault's landing sits beside the second-serve buttons, so recording it costs no extra step and
+ignoring it costs nothing. The second fault's is offered after the point, which a double fault has
+already decided, so point entry never waits for it. Each is stored per attempt as
+`firstServeLanding` and `secondServeLanding`.
 
 ### Detail completion behavior
 
@@ -407,9 +411,9 @@ Each mental-state event stores:
 - Capture moment: after point, game end, set end, or manual
 - Optional reason and note
 
-**Pending — capture at game and set boundaries.** Only after-point and manual capture are produced.
-The end-of-game reminder is specified above and does not exist, and `linkedPointGroupId` is set only
-while a point entry is open, so an observation recorded between points is stored with no link to the
+The end-of-game reminder appears as a dismissible strip when a game or set finishes — never in the
+point-entry path, and never once the match is over. The capture moment is recorded from where the
+observation was made rather than inferred, and an observation taken between points links to the
 point it followed.
 
 These are parent observations, not psychological diagnoses.
@@ -493,16 +497,15 @@ Statistics can be scoped to the whole match, to each recorded set, and to a deci
 where the format allows one. Every displayed score, serve, return, shot-quality, and coverage value
 uses the selected scope.
 
-**Pending — metrics specified above but not computed.** Holds and breaks; service games held and
-broken; first-serve return points won; second-serve return points won. Nothing in the statistics
-projection accumulates them.
+Holds and breaks are derived from the score either side of each point rather than from a separate
+event, so a corrected match cannot disagree with the scoreboard. Tiebreaks are excluded: service
+rotates inside a tiebreak, so a hold has no meaning there.
 
-**Pending — metrics computed but not shown on the Stats screen.** Points won by rally-length range
-reaches the coach report and the export, not the app.
+Return points are split by the serve the receiver actually had to play. A double fault counts as a
+second-serve return point won.
 
-**Pending — a ball-landed statistic.** Landing is captured per point and surfaced nowhere. It should
-be reported as two separate breakdowns, because a serve into the net and a groundstroke into the net
-are different mistakes: one for serve errors, one for every other error.
+Error placement is reported as two breakdowns, because a serve into the net and a groundstroke into
+the net are different mistakes: one for serve errors, one for every other error.
 
 ### Pressure situations and points won
 
@@ -567,9 +570,13 @@ Every recorded point appears in sequence and stores or derives:
 
 Mental-state changes, score synchronizations, game completion, set completion, corrections, and retirements also appear in the timeline.
 
-**Pending — stored fields absent from the timeline row.** Serve attempt and result, the
-final-stroke player, the responsible player, and the mental-state context are all recorded on the
-point and none are displayed. First versus second serve is the most useful of them.
+Every timeline row states the serve attempt and its result, and which player the point-ending shot
+was attributed to — section 8 gives it to the point winner on a winner, return winner, or forced
+error and to the loser otherwise, so a row reading only "Forehand" left the more interesting half
+implied.
+
+**Pending — mental-state context on the row.** Each point records the state of both players at the
+time. It reaches the export and the API, not the timeline row.
 
 ## 14. On-demand LLM strategy review
 
@@ -728,10 +735,11 @@ The self-contained HTML report can be created from device-local data without upl
 
 A shared report is an immutable snapshot of the selected dataset and privacy choices. Regenerating analysis or correcting the match creates a new report version and marks older versions as out of date; it does not silently change what a coach previously reviewed.
 
-**Pending — the report is whole-match only.** The Stats screen scopes to the whole match, each set,
-and a deciding match tiebreak; the report has no equivalent and reports every figure across the full
-match. Its statistics should carry the same scopes, and the point timeline should be separable from
-them rather than sitting in the same continuous page.
+The report's statistics carry the same scopes as the Stats screen — the whole match, each set, and a
+deciding match tiebreak — drawn from the same shared definition so the two cannot disagree about
+which scopes a match has. A scope that was never played is never offered. The point timeline sits on
+its own tab rather than continuing the same page, and printing expands every tab so nothing is hidden
+behind one on paper.
 
 **Open item:** a report link currently renders the match as it stands when the page is opened, not as it stood when the link was created. Privacy choices are frozen with the link and enforced server-side — the link's own flags overrule the stored report options, so a link can never disclose more than it was created with — but the dataset is not yet frozen. Storing the event cutoff on the link would close this.
 
@@ -788,6 +796,22 @@ Delivered since version 1.2, and specified in the sections named:
 - ~~Account authentication~~ — delivered as a single account password. Section 24.
 - ~~A live link creatable from the Match tab, with a copy control~~ — delivered, and the created URL
   is remembered on the device so it stays copyable for the rest of the match. Section 26.
+- ~~A match stageable before the toss~~ — first server is settable in the tracker until the first
+  point, recorded as a correction against `match_created`. Section 4.
+- ~~Ball Landed on faults, and reported~~ — offered on both faults without adding a required tap, and
+  reported as two breakdowns, serve errors apart from the rest. Sections 8 and 11.
+- ~~Holds and breaks, and service games held and broken~~ — derived from the score either side of each
+  point; tiebreaks excluded. Section 11.
+- ~~First- and second-serve return points won~~ — split by the serve the receiver had to play.
+  Section 11.
+- ~~An end-of-game mental-state reminder~~ — a dismissible strip at a game or set boundary, never in
+  the point-entry path, with the capture moment recorded and the observation linked to the preceding
+  point. Section 9.
+- ~~Points won by rally length on the Stats screen~~ — previously reaching only the coach report.
+  Section 11.
+- ~~Serve attempt, result, and shot attribution on the timeline row~~. Section 13.
+- ~~Scoped coach-report statistics, with the timeline on its own tab~~ — the same scopes the Stats
+  screen offers, from one shared definition. Sections 11 and 18.
 
 Outstanding work, in two tiers. The first comes from tracking real matches and is what the product
 owner is actually waiting on. The second is the standing backlog; items marked *(v2 §n)* were folded
@@ -795,27 +819,8 @@ in from the superseded version 2 draft.
 
 ### Next — raised from courtside use
 
-Recorded while tracking real matches, and ahead of the backlog below. Each is specified in the
-section named.
-
-1. **A match cannot be staged before the toss.** First server is required at setup and cannot be
-   changed later, so setup has to wait until the toss is done. Section 4.
-2. **Ball Landed is not offered on faults**, so the match's most common error never records where it
-   landed. Section 8.
-3. **Ball Landed is reported nowhere.** It should appear as two breakdowns — serve errors, and every
-   other error. Section 11.
-4. **Holds and breaks, and service games held and broken**, are specified and not computed.
-   Section 11.
-5. **First-serve and second-serve return points won** are specified and not computed. Section 11.
-6. **No end-of-game mental-state reminder**, and an observation recorded between points is not linked
-   to the point it followed. Section 9.
-7. **Points won by rally-length range** reaches the coach report but not the Stats screen.
-   Section 11.
-8. **Serve attempt and result do not appear on the timeline row**, nor does the player a shot was
-   attributed to. Section 13.
-9. **The coach report has no scopes.** Its statistics are whole-match only, while the Stats
-   screen offers the whole match, each set, and a deciding match tiebreak. The report should carry
-   the same scopes, with the point timeline separable from them. Sections 11 and 18.
+Clear. Everything raised from tracking real matches has shipped and is listed above. The backlog
+below is next unless courtside use turns up something new.
 
 ### Later
 

@@ -9,7 +9,7 @@ import type {
   PointDetails,
   ShotType,
 } from "./model.ts";
-import { activePointEvents, isBreakPoint, pointDetailsMap } from "./scoring.ts";
+import { activePointEvents, isBreakPoint, pointDetailsMap, projectScore } from "./scoring.ts";
 
 export interface PlayerStats {
   pointsWon: number;
@@ -311,6 +311,40 @@ export function filterEventsForStatsScope(events: MatchEvent[], config: MatchCon
     }
     return false;
   });
+}
+
+export interface ScopeOption { id: StatsScope; label: string }
+
+/**
+ * The scopes a match can be reported under. `includeUnplayed` keeps the live
+ * tracker's behaviour — the set in progress, and a format's match tiebreak, are
+ * offered before any point lands in them. A finished artefact such as the coach
+ * report passes false so it never renders an empty scope.
+ *
+ * Shared so the Stats screen and the coach report cannot disagree about which
+ * scopes a match has.
+ */
+export function statsScopeOptions(events: MatchEvent[], config: MatchConfig, includeUnplayed = true): ScopeOption[] {
+  const setNumbers = new Set<number>();
+  let playedMatchTiebreak = false;
+  for (const point of activePointEvents(events)) {
+    const scope = pointStatsScope(point, config);
+    if (scope === "match_tiebreak") playedMatchTiebreak = true;
+    else if (scope.startsWith("set_")) setNumbers.add(Number(scope.slice(4)));
+  }
+  const rules = FORMAT_RULES[config.format];
+  if (includeUnplayed) {
+    const current = projectScore(events, config);
+    const inMatchTiebreak = rules.matchTiebreakThird && current.inTiebreak && current.tiebreakTarget === 10 && current.sets.length >= 2;
+    if (!current.matchComplete && !inMatchTiebreak) setNumbers.add(current.sets.length + 1);
+    if (!setNumbers.size) setNumbers.add(1);
+  }
+  const options: ScopeOption[] = [
+    { id: "total", label: "Total" },
+    ...[...setNumbers].sort((a, b) => a - b).map((number) => ({ id: `set_${number}` as StatsScope, label: `Set ${number}` })),
+  ];
+  if (rules.matchTiebreakThird && (includeUnplayed || playedMatchTiebreak)) options.push({ id: "match_tiebreak", label: "Match TB" });
+  return options;
 }
 
 export function percentage(numerator: number, denominator: number): string {

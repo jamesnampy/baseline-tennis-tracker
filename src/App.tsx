@@ -1,7 +1,7 @@
 /* eslint-disable jsx-a11y/label-has-associated-control */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { buildStats, filterEventsForStatsScope, percentage, pointStatsScope, shotImpact, strategyReview, type StatsScope } from "@/lib/tennis/analytics";
+import { buildStats, filterEventsForStatsScope, percentage, statsScopeOptions, shotImpact, strategyReview, type StatsScope } from "@/lib/tennis/analytics";
 import { buildExportBundle, downloadExport, zipFiles } from "@/lib/tennis/export";
 import {
   AdvancedShotType, BallLanding, deepCloneScore, eligiblePointOutcomes, FinalStroke, FORMAT_RULES, hasCompleteShotDetails, MatchConfig,
@@ -488,17 +488,8 @@ function ComparisonTable({ eyebrow, heading, names, rows }: { eyebrow: string; h
 function StatsView({ match, stats }: { match: MatchRecord; stats: ReturnType<typeof buildStats> }) {
   const [shotPlayer, setShotPlayer] = useState<PlayerKey>("my");
   const [scope, setScope] = useState<StatsScope>("total");
-  const scopeOptions = useMemo(() => {
-    const setNumbers = new Set<number>();
-    for (const point of activePointEvents(match.events)) { const pointScope = pointStatsScope(point, match.config); if (pointScope.startsWith("set_")) setNumbers.add(Number(pointScope.slice(4))); }
-    const current = projectScore(match.events, match.config);
-    const currentIsMatchTiebreak = FORMAT_RULES[match.config.format].matchTiebreakThird && current.inTiebreak && current.tiebreakTarget === 10 && current.sets.length >= 2;
-    if (!current.matchComplete && !currentIsMatchTiebreak) setNumbers.add(current.sets.length + 1);
-    if (!setNumbers.size) setNumbers.add(1);
-    const options: { id: StatsScope; label: string }[] = [{ id: "total", label: "Total" }, ...[...setNumbers].sort((a,b)=>a-b).map((number) => ({ id: `set_${number}` as StatsScope, label: `Set ${number}` }))];
-    if (FORMAT_RULES[match.config.format].matchTiebreakThird) options.push({ id: "match_tiebreak", label: "Match TB" });
-    return options;
-  }, [match]);
+  // Shared with the coach report so both offer identical scopes.
+  const scopeOptions = useMemo(() => statsScopeOptions(match.events, match.config), [match]);
   const viewStats = useMemo(() => scope === "total" ? stats : buildStats(filterEventsForStatsScope(match.events, match.config, scope), match.config), [match, scope, stats]);
   const rows = [
     ["Total points won", viewStats.my.pointsWon, viewStats.opponent.pointsWon], ["Service points won", `${viewStats.my.servicePointsWon}/${viewStats.my.servicePoints}`, `${viewStats.opponent.servicePointsWon}/${viewStats.opponent.servicePoints}`], ["Aces", viewStats.my.aces, viewStats.opponent.aces], ["Double faults", viewStats.my.doubleFaults, viewStats.opponent.doubleFaults],
