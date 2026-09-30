@@ -6,7 +6,7 @@ import { buildExportBundle, downloadExport, zipFiles } from "@/lib/tennis/export
 import {
   AdvancedShotType, BallLanding, deepCloneScore, eligiblePointOutcomes, FinalStroke, FORMAT_RULES, hasCompleteShotDetails, MatchConfig,
   IdentityMapping, MatchEvent, MatchRecord, MentalState, otherPlayer, PlayerKey, PlayerProfile, PointDetails,
-  pointDetailsPlayer, PointOutcome, RallyRange, ScoreState, ShotSituation, ShotType, usesAdvancedShotOptions, usesBallLandingOptions,
+  pointDetailsPlayer, PointCompletedEvent, PointOutcome, RallyRange, ScoreState, ShotSituation, ShotType, usesAdvancedShotOptions, usesBallLandingOptions,
 } from "@/lib/tennis/model";
 import { createPlayerProfile, linkPlayerIdentity, playerProfileAnalytics, versionPlayerProfile } from "@/lib/tennis/profiles";
 import { buildPressureAnalytics } from "@/lib/tennis/pressure";
@@ -24,7 +24,7 @@ import {
 } from "@/lib/tennis/sync";
 
 type Tab = "track" | "stats" | "timeline" | "match";
-type TrackStage = "serve" | "winner" | "outcome" | "details";
+type TrackStage = "serve" | "winner" | "outcome" | "details" | "serve_landing";
 
 const mentalLabels: Record<MentalState, string> = {
   positive: "Positive", focused: "Focused", tense: "Tense", frustrated: "Frustrated",
@@ -344,7 +344,19 @@ function MatchTracker({ match, setMatch, players, mappings, saved, onExit }: { m
     const pointEvent: MatchEvent = { ...eventBase(match, preceding.length + 1), source: serveResult === "double_fault" ? "automatic" : "tracked", type: "point_completed", pointGroupId, payload: { winner, loser: otherPlayer(winner), server: score.server, receiver: otherPlayer(score.server), serveAttempt, serveResult, faults, scoreBefore: score, scoreAfter: after, mentalContext: mental } };
     // Game, set, and match completions carry the point group so a single undo voids them with the point.
     const completions: MatchEvent[] = derivedCompletions(score, after).map((completion, index) => ({ ...eventBase(match, preceding.length + 2 + index), source: "automatic", pointGroupId, ...completion }));
-    append([...preceding, pointEvent, ...completions]); setUndoCount(0); if (serveResult === "ace" || serveResult === "double_fault") resetPointEntry(); else { setPendingPointId(pointGroupId); setStage("outcome"); }
+    // An ace ends the point at once, so anything already recorded for it — a
+    // first-serve landing, after a fault — is saved with the point rather than
+    // dropped. It has to ride in this one append: a second call in the same tick
+    // would build on a stale match.
+    const annotations: MatchEvent[] = serveResult === "ace" && Object.keys(details).length
+      ? [{ ...eventBase(match, preceding.length + 2 + completions.length), source: "tracked", type: "point_annotated", pointGroupId, payload: details }]
+      : [];
+    append([...preceding, pointEvent, ...completions, ...annotations]); setUndoCount(0);
+    if (serveResult === "ace") resetPointEntry();
+    // A double fault is already scored. The landing is offered afterwards so the
+    // point is never held up waiting for an optional detail.
+    else if (serveResult === "double_fault") { setPendingPointId(pointGroupId); setStage("serve_landing"); }
+    else { setPendingPointId(pointGroupId); setStage("outcome"); }
   }
   function onServe(result: "in" | "fault" | "ace") {
     const pointGroupId = pendingPointId ?? makeId(); const serveEvent = makeServeEvent(pointGroupId, result, serveAttempt);
@@ -357,7 +369,7 @@ function MatchTracker({ match, setMatch, players, mappings, saved, onExit }: { m
     const point = points.find((item) => item.pointGroupId === pendingPointId); if (!point) return;
     if (!eligiblePointOutcomes(point).includes(outcome)) return;
     const owner = pointDetailsPlayer(point, outcome);
-    setDetails({ outcome, rallyRange: outcome.startsWith("return_") ? "1-5" : undefined, responsiblePlayer: owner, benefitingPlayer: point.payload.winner, finalStrokePlayer: owner }); setStage("details");
+    setDetails((current) => ({ ...current, outcome, rallyRange: outcome.startsWith("return_") ? "1-5" : undefined, responsiblePlayer: owner, benefitingPlayer: point.payload.winner, finalStrokePlayer: owner })); setStage("details");
   }
   function finishDetails() { if (pendingPointId && Object.keys(details).length) append([{ ...eventBase(match), source: "tracked", type: "point_annotated", pointGroupId: pendingPointId, payload: details }]); resetPointEntry(); }
   function undoPoint() {
@@ -390,7 +402,7 @@ function MatchTracker({ match, setMatch, players, mappings, saved, onExit }: { m
   }
   if (score.matchComplete && tab === "track") return <CompletedView match={match} score={score} stats={stats} saved={saved} onTab={setTab} onExit={onExit} />;
   return <main className="app-shell tracker-shell"><header className="match-bar"><button className="icon-button" aria-label="Exit match" onClick={onExit}>×</button><div><span>SET {score.sets.length + 1} · {score.inTiebreak ? (score.tiebreakTarget === 10 ? "MATCH TIEBREAK" : "TIEBREAK") : "LIVE"}</span><strong>{match.config.myPlayerName} vs. {match.config.opponentName}</strong><small className={saved ? "save-state saved" : "save-state"}>● {saved ? "Saved on device" : "Saving…"}</small></div><button className="undo icon-button" disabled={!points.length || undoCount >= 5} onClick={undoPoint}>↶<small>Undo</small></button></header>
-    <Scoreboard match={match} score={score} onSync={() => setScoreModal(true)} /><section className="tracker-content">{stage === "serve" && <ServeStage score={score} config={match.config} serveAttempt={serveAttempt} onServe={onServe} />}{stage === "winner" && <WinnerStage config={match.config} onWinner={chooseWinner} />}{stage === "outcome" && <OutcomeStage allowedOutcomes={pendingPoint ? eligiblePointOutcomes(pendingPoint) : []} onOutcome={chooseOutcome} onSkip={resetPointEntry} />}{stage === "details" && <DetailsTray details={details} setDetails={setDetails} onContinue={finishDetails} />}</section>
+    <Scoreboard match={match} score={score} onSync={() => setScoreModal(true)} /><section className="tracker-content">{stage === "serve" && <ServeStage score={score} config={match.config} serveAttempt={serveAttempt} onServe={onServe} firstServeLanding={details.firstServeLanding} onFirstServeLanding={(landing) => setDetails((current) => ({ ...current, firstServeLanding: landing }))} />}{stage === "winner" && <WinnerStage config={match.config} onWinner={chooseWinner} />}{stage === "outcome" && <OutcomeStage allowedOutcomes={pendingPoint ? eligiblePointOutcomes(pendingPoint) : []} onOutcome={chooseOutcome} onSkip={finishDetails} />}{stage === "details" && <DetailsTray details={details} setDetails={setDetails} onContinue={finishDetails} />}{stage === "serve_landing" && <ServeLandingStage onSelect={(landing) => setDetails((current) => ({ ...current, secondServeLanding: landing }))} onDone={finishDetails} selected={details.secondServeLanding} />}</section>
     <button className="mental-pill" onClick={() => setMentalModal("my")}><span className={`mental-dot ${mental.my}`} /> {match.config.myPlayerName} is {mentalLabels[mental.my].toLowerCase()} <b>Change</b></button><div className="connection-strip"><span>● {online ? "Online" : "Offline tracking"}</span><span>{stats.coverage}% tracked</span></div><BottomNav tab={tab} onTab={setTab} />
     {tab !== "track" && <div className="overlay-page"><button className="overlay-close" onClick={() => setTab("track")}>×</button>{tab === "stats" && <StatsView match={match} stats={stats} />}{tab === "timeline" && <TimelineView match={match} points={points} details={detailMap} />}{tab === "match" && <MatchView match={match} stats={stats} score={score} onExport={() => downloadExport(match, players, mappings)} onGenerate={generateStrategy} />}</div>}
     {scoreModal && <ScoreSyncModal match={match} score={score} onClose={() => setScoreModal(false)} onSave={(corrected, reason) => { const completions: MatchEvent[] = derivedCompletions(score, corrected, { includeGames: false }).map((completion, index) => ({ ...eventBase(match, index + 2), source: "corrected", ...completion })); append([{ ...eventBase(match), source: "corrected", type: "score_synced", payload: { previous: score, corrected, reason, valid: true } }, ...completions]); setScoreModal(false); resetPointEntry(); }} />}
@@ -403,7 +415,25 @@ function Scoreboard({ match, score, onSync }: { match: MatchRecord; score: Score
   const columns = `minmax(105px, 1fr) repeat(${score.sets.length}, 31px) 40px 52px`;
   return <section className="scoreboard" aria-label="Live match score"><div className="set-head" style={{ gridTemplateColumns: columns }}><span>PLAYER</span>{score.sets.map((_, index) => <span key={index}>S{index + 1}</span>)}<span>G</span><span>PTS</span></div>{(["my", "opponent"] as PlayerKey[]).map((player) => { const index = player === "my" ? 0 : 1; return <div className={`score-row ${score.server === player ? "serving" : ""}`} style={{ gridTemplateColumns: columns }} key={player}><span className="score-name">{score.server === player && <i />} {names[player]}</span>{score.sets.map((set, setIndex) => <span key={setIndex}>{set.isMatchTiebreak ? set.tiebreak?.[index] : set.games[index]}{set.tiebreak && !set.isMatchTiebreak && <sup>{set.tiebreak[index]}</sup>}</span>)}<strong>{score.games[index]}</strong><b>{pointScoreLabel(score, player, match.config.adScoring)}</b></div>; })}<button className="sync-link" onClick={onSync}>Set current score</button></section>;
 }
-function ServeStage({ score, config, serveAttempt, onServe }: { score: ScoreState; config: MatchConfig; serveAttempt: 1 | 2; onServe: (result: "in" | "fault" | "ace") => void }) { return <><div className="point-prompt"><p className="eyebrow">POINT · {playerName(config, score.server).toUpperCase()} SERVING</p><div className="serve-title"><h1>{serveAttempt === 1 ? "First serve" : "Second serve"}</h1><div className="serve-balls" aria-label={`${3 - serveAttempt} serves available`}><i className="ball" />{serveAttempt === 1 ? <i className="ball" /> : <i className="ball spent" />}</div></div></div><div className="serve-grid"><button className="big-action serve-in" onClick={() => onServe("in")}><small>{serveAttempt === 1 ? "1ST" : "2ND"} SERVE</small><strong>In</strong><span>Continue point</span></button><button className="big-action fault" onClick={() => onServe("fault")}><small>{serveAttempt === 1 ? "1ST" : "2ND"} SERVE</small><strong>Fault</strong><span>{serveAttempt === 1 ? "One ball left" : "Double fault"}</span></button><button className="wide-action ace" onClick={() => onServe("ace")}><small>POINT WON</small><strong>Ace</strong><span>Finish point</span></button></div></>; }
+/**
+ * Where a fault landed (roadmap item, section 8). Offered, never required: the
+ * first-serve row sits alongside the second-serve buttons so recording it costs
+ * nothing and ignoring it costs nothing either.
+ */
+function ServeLandingRow({ label, selected, onSelect }: { label: string; selected?: BallLanding; onSelect: (landing: BallLanding) => void }) {
+  return <div className="serve-landing"><p>{label} <em>Optional</em></p><div>
+    {BALL_LANDINGS.map((landing) => <button key={landing} className={selected === landing ? "selected" : ""} onClick={() => onSelect(landing)}>{landingLabels[landing]}</button>)}
+  </div></div>;
+}
+
+/** Shown after a double fault, which is already scored by the time this appears. */
+function ServeLandingStage({ selected, onSelect, onDone }: { selected?: BallLanding; onSelect: (landing: BallLanding) => void; onDone: () => void }) {
+  return <><div className="point-prompt compact"><p className="eyebrow">DOUBLE FAULT · POINT SAVED</p><h1>Where did it land?</h1><p>Optional—choose one, or keep moving.</p></div>
+    <div className="landing-grid">{BALL_LANDINGS.map((landing) => <button className={`outcome ${selected === landing ? "selected" : ""}`} key={landing} onClick={() => { onSelect(landing); }}>{landingLabels[landing]}</button>)}</div>
+    <button className="skip-button" onClick={onDone}>{selected ? "Save and continue" : "Skip details"} <span>→</span></button></>;
+}
+
+function ServeStage({ score, config, serveAttempt, onServe, firstServeLanding, onFirstServeLanding }: { score: ScoreState; config: MatchConfig; serveAttempt: 1 | 2; onServe: (result: "in" | "fault" | "ace") => void; firstServeLanding?: BallLanding; onFirstServeLanding: (landing: BallLanding) => void }) { return <><div className="point-prompt"><p className="eyebrow">POINT · {playerName(config, score.server).toUpperCase()} SERVING</p><div className="serve-title"><h1>{serveAttempt === 1 ? "First serve" : "Second serve"}</h1><div className="serve-balls" aria-label={`${3 - serveAttempt} serves available`}><i className="ball" />{serveAttempt === 1 ? <i className="ball" /> : <i className="ball spent" />}</div></div></div><div className="serve-grid"><button className="big-action serve-in" onClick={() => onServe("in")}><small>{serveAttempt === 1 ? "1ST" : "2ND"} SERVE</small><strong>In</strong><span>Continue point</span></button><button className="big-action fault" onClick={() => onServe("fault")}><small>{serveAttempt === 1 ? "1ST" : "2ND"} SERVE</small><strong>Fault</strong><span>{serveAttempt === 1 ? "One ball left" : "Double fault"}</span></button><button className="wide-action ace" onClick={() => onServe("ace")}><small>POINT WON</small><strong>Ace</strong><span>Finish point</span></button></div>{serveAttempt === 2 && <ServeLandingRow label="First serve landed" selected={firstServeLanding} onSelect={onFirstServeLanding} />}</>; }
 function WinnerStage({ config, onWinner }: { config: MatchConfig; onWinner: (player: PlayerKey) => void }) { return <><div className="point-prompt"><p className="eyebrow">SERVE IS IN</p><h1>Who won the point?</h1></div><div className="winner-grid"><button onClick={() => onWinner("my")}><small>POINT TO</small><strong>{config.myPlayerName}</strong></button><button onClick={() => onWinner("opponent")}><small>POINT TO</small><strong>{config.opponentName}</strong></button></div></>; }
 function OutcomeStage({ allowedOutcomes, onOutcome, onSkip }: { allowedOutcomes: PointOutcome[]; onOutcome: (outcome: PointOutcome) => void; onSkip: () => void }) { const returnOutcome = (["return_winner", "return_error"] as PointOutcome[]).find((outcome) => allowedOutcomes.includes(outcome)); const outcomes = [returnOutcome, "winner", "forced_error", "unforced_error"].filter(Boolean) as PointOutcome[]; return <><div className="point-prompt compact"><p className="eyebrow">POINT SAVED</p><h1>How did the point end?</h1><p>Optional—choose one, or keep moving.</p></div><div className="outcome-grid">{outcomes.map((outcome) => <button className="outcome" key={outcome} onClick={() => onOutcome(outcome)}>{outcomeLabels[outcome]}</button>)}</div><button className="skip-button" onClick={onSkip}>Skip details <span>→</span></button></>; }
 function DetailsTray({ details, setDetails, onContinue }: { details: PointDetails; setDetails: (details: PointDetails) => void; onContinue: () => void }) {
@@ -462,6 +492,13 @@ function StatsView({ match, stats }: { match: MatchRecord; stats: ReturnType<typ
  * calculation. `text` overrides the signed default for rate-shaped metrics.
  */
 function Metric({ label, value, sample, text, detail }: { label: string; value: number; sample: number; text?: string; detail?: string }) { return <div><span>{label}</span><strong>{text ?? `${value >= 0 ? "+" : ""}${value}`}</strong><small>n={sample}{detail && sample > 0 ? ` · ${detail}` : ""}</small></div>; }
+/** How the serve that ended the point is described on a timeline row. */
+function serveDescription(event: PointCompletedEvent): string {
+  if (event.payload.serveResult === "double_fault") return "double fault";
+  const attempt = event.payload.serveAttempt === 1 ? "1st serve" : "2nd serve";
+  return event.payload.serveResult === "ace" ? `ace on the ${attempt}` : attempt;
+}
+
 interface TimelineEntry { id: string; dot: string; eyebrow: string; title: string; context: string; detail?: string }
 
 /**
@@ -483,8 +520,20 @@ function timelineEntries(match: MatchRecord, details: Map<string, PointDetails>)
         id: event.id, dot: event.payload.winner,
         eyebrow: `Point ${numbers.get(event.pointGroupId) ?? "—"} · Set ${pointSetNumber(event)} · Game ${pointGameNumber(event)} · ${time(event.timestamp)}`,
         title: `${name(event.payload.winner)} won · ${detail?.outcome ? outcomeLabels[detail.outcome] : event.payload.serveResult === "in" ? "Outcome not added" : outcomeLabels[event.payload.serveResult]}`,
-        context: `${name(event.payload.server)} serving · ${scoreSummary(event.payload.scoreAfter, match.config)}`,
-        detail: detail && [detail.rallyRange, detail.finalStroke && shotLabels[detail.finalStroke], detail.ballLanding && `Landed ${shotLabels[detail.ballLanding]}`, detail.shotType && shotLabels[detail.shotType], detail.shotSituation && shotLabels[detail.shotSituation], detail.advancedShotType && shotLabels[detail.advancedShotType]].filter(Boolean).join(" · "),
+        context: `${name(event.payload.server)} serving · ${serveDescription(event)} · ${scoreSummary(event.payload.scoreAfter, match.config)}`,
+        detail: detail && [
+          // Section 8 attributes a shot to one player, and which one depends on the
+          // outcome, so the row says whose shot it was rather than leaving it implied.
+          detail.finalStrokePlayer && `Shot by ${name(detail.finalStrokePlayer)}`,
+          detail.rallyRange,
+          detail.finalStroke && shotLabels[detail.finalStroke],
+          detail.ballLanding && `Landed ${shotLabels[detail.ballLanding]}`,
+          detail.shotType && shotLabels[detail.shotType],
+          detail.shotSituation && shotLabels[detail.shotSituation],
+          detail.advancedShotType && shotLabels[detail.advancedShotType],
+          detail.firstServeLanding && `1st serve ${landingLabels[detail.firstServeLanding].toLowerCase()}`,
+          detail.secondServeLanding && `2nd serve ${landingLabels[detail.secondServeLanding].toLowerCase()}`,
+        ].filter(Boolean).join(" · "),
       });
     } else if (event.type === "game_completed") {
       entries.push({ id: event.id, dot: "event", eyebrow: `Game · Set ${event.payload.setNumber} · Game ${event.payload.gameNumber}`, title: `${name(event.payload.winner)} ${event.payload.tiebreak ? "wins the tiebreak" : event.payload.hold ? "holds" : "breaks"}`, context: `Games ${event.payload.games[0]}–${event.payload.games[1]}${event.payload.tiebreak ? ` · tiebreak ${event.payload.tiebreak[0]}–${event.payload.tiebreak[1]}` : ""}` });
