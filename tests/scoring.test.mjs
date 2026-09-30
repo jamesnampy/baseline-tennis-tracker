@@ -367,3 +367,94 @@ test("shot attribution and the win/error tally agree for every outcome", () => {
     assert.equal(stats.total, 1, outcome);
   }
 });
+
+/** Builds a match by playing the given point winners in order, first server "my". */
+function matchFrom(winners, overrides = {}) {
+  const config = { myPlayerName: "Ethan", opponentName: "Noah", format: "best_of_3_tiebreak", firstServer: "my", adScoring: true, startingMentalState: { my: "focused", opponent: "not_observed" }, ...overrides };
+  let score = initialScore(config.firstServer);
+  const events = []; let seq = 1;
+  winners.forEach((entry, index) => {
+    const winner = typeof entry === "string" ? entry : entry.winner;
+    const serveAttempt = typeof entry === "string" ? 1 : (entry.serveAttempt ?? 1);
+    const serveResult = typeof entry === "string" ? "in" : (entry.serveResult ?? "in");
+    const before = JSON.parse(JSON.stringify(score));
+    const after = applyPoint(score, winner, config.format, config.adScoring);
+    events.push({ id: `e${seq}`, matchId: "m", schemaVersion: 1, sequence: seq++, timestamp: new Date(0).toISOString(), source: "tracked", type: "point_completed", pointGroupId: `g${index}`,
+      payload: { winner, loser: winner === "my" ? "opponent" : "my", server: before.server, receiver: before.server === "my" ? "opponent" : "my", serveAttempt, serveResult, faults: serveAttempt === 2 ? 1 : 0, scoreBefore: before, scoreAfter: after, mentalContext: { my: "focused", opponent: "not_observed" } } });
+    score = after;
+  });
+  return { id: "m", schemaVersion: 1, createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString(), authorized: true, config, events };
+}
+
+test("a service game won by the server is a hold, and one lost is a break", () => {
+  const held = matchFrom(["my", "my", "my", "my"]);
+  const heldStats = buildStats(held.events, held.config);
+  assert.equal(heldStats.my.serviceGames, 1);
+  assert.equal(heldStats.my.serviceGamesHeld, 1);
+  assert.equal(heldStats.my.serviceGamesLost, 0);
+  assert.equal(heldStats.opponent.breaks, 0, "no break when the server held");
+
+  const broken = matchFrom(["opponent", "opponent", "opponent", "opponent"]);
+  const brokenStats = buildStats(broken.events, broken.config);
+  assert.equal(brokenStats.my.serviceGames, 1, "the game is still counted against the server");
+  assert.equal(brokenStats.my.serviceGamesHeld, 0);
+  assert.equal(brokenStats.my.serviceGamesLost, 1);
+  assert.equal(brokenStats.opponent.breaks, 1);
+  assert.equal(brokenStats.my.breaks, 0);
+});
+
+test("an unfinished game counts towards no hold or break", () => {
+  const match = matchFrom(["my", "my"]);
+  const stats = buildStats(match.events, match.config);
+  assert.equal(stats.my.serviceGames, 0);
+  assert.equal(stats.my.serviceGamesHeld, 0);
+  assert.equal(stats.opponent.breaks, 0);
+});
+
+test("tiebreak points produce no holds or breaks, because service rotates inside one", () => {
+  // Six games each, then the tiebreak. Service alternates, so both players serve.
+  const toSixAll = [];
+  for (let game = 0; game < 12; game += 1) {
+    const winner = game % 2 === 0 ? "my" : "opponent";
+    for (let point = 0; point < 4; point += 1) toSixAll.push(winner);
+  }
+  const match = matchFrom([...toSixAll, "my", "my", "my", "my", "my", "my", "my"]);
+  const stats = buildStats(match.events, match.config);
+  // Twelve completed games, six served by each; every one held.
+  assert.equal(stats.my.serviceGames + stats.opponent.serviceGames, 12);
+  assert.equal(stats.my.serviceGamesHeld, 6);
+  assert.equal(stats.opponent.serviceGamesHeld, 6);
+  assert.equal(stats.my.breaks + stats.opponent.breaks, 0);
+});
+
+test("return points are split by the serve the receiver had to play", () => {
+  const match = matchFrom([
+    { winner: "opponent", serveAttempt: 1 },
+    { winner: "my", serveAttempt: 1 },
+    { winner: "opponent", serveAttempt: 2 },
+    { winner: "opponent", serveAttempt: 2, serveResult: "double_fault" },
+  ]);
+  const stats = buildStats(match.events, match.config);
+  // "my" served all four; "opponent" received all four.
+  assert.equal(stats.opponent.firstServeReturnPoints, 2);
+  assert.equal(stats.opponent.firstServeReturnPointsWon, 1);
+  assert.equal(stats.opponent.secondServeReturnPoints, 2);
+  assert.equal(stats.opponent.secondServeReturnPointsWon, 2, "a double fault is a second-serve return point won");
+  assert.equal(stats.my.firstServeReturnPoints, 0, "the server receives nothing");
+});
+
+test("serve errors and rally errors are reported as separate landing breakdowns", () => {
+  const match = matchFrom(["opponent", "my"]);
+  match.events.push(
+    { id: "a1", matchId: "m", schemaVersion: 1, sequence: 90, timestamp: new Date(0).toISOString(), source: "tracked", type: "point_annotated", pointGroupId: "g0",
+      payload: { outcome: "unforced_error", ballLanding: "long", finalStrokePlayer: "my", responsiblePlayer: "my" } },
+    { id: "a2", matchId: "m", schemaVersion: 1, sequence: 91, timestamp: new Date(0).toISOString(), source: "tracked", type: "point_annotated", pointGroupId: "g1",
+      payload: { firstServeLanding: "net", secondServeLanding: "side" } },
+  );
+  const stats = buildStats(match.events, match.config);
+  // "my" served both points, and made the rally error on the first.
+  assert.deepEqual(stats.my.rallyErrorLanding, { net: 0, long: 1, side: 0 });
+  assert.deepEqual(stats.my.serveErrorLanding, { net: 1, long: 0, side: 1 });
+  assert.deepEqual(stats.opponent.rallyErrorLanding, { net: 0, long: 0, side: 0 }, "the receiver made neither error");
+  assert.deepEqual(stats.opponent.serveErrorLanding, { net: 0, long: 0, side: 0 });
+});

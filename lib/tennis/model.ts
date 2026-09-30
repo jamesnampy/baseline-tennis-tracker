@@ -116,6 +116,14 @@ export interface PointDetails {
   responsiblePlayer?: PlayerKey;
   benefitingPlayer?: PlayerKey;
   finalStrokePlayer?: PlayerKey;
+  /**
+   * Where a fault landed, per attempt. A point has at most one of each, and both
+   * are attributed to the server. Kept apart from `ballLanding`, which describes
+   * the shot that ended a rally: a serve into the net and a groundstroke into the
+   * net are different mistakes and are reported separately.
+   */
+  firstServeLanding?: BallLanding;
+  secondServeLanding?: BallLanding;
 }
 
 export interface EventBase {

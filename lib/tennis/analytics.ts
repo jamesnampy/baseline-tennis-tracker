@@ -1,5 +1,6 @@
 import { FORMAT_RULES, hasCompleteShotDetails, otherPlayer } from "./model.ts";
 import type {
+  BallLanding,
   FinalStroke,
   MatchConfig,
   MatchEvent,
@@ -31,6 +32,24 @@ export interface PlayerStats {
   breakPointsFaced: number;
   breakPointsSaved: number;
   longestStreak: number;
+  /**
+   * Service games that finished. Tiebreaks are excluded throughout: service
+   * rotates inside a tiebreak, so "held" has no meaning there.
+   */
+  serviceGames: number;
+  serviceGamesHeld: number;
+  serviceGamesLost: number;
+  /** Games won while receiving — the other side of the opponent's lost service games. */
+  breaks: number;
+  /** Return points split by the serve the receiver actually had to play. */
+  firstServeReturnPoints: number;
+  firstServeReturnPointsWon: number;
+  secondServeReturnPoints: number;
+  secondServeReturnPointsWon: number;
+  /** Where this player's faults landed. */
+  serveErrorLanding: Record<BallLanding, number>;
+  /** Where this player's rally-ending errors landed. */
+  rallyErrorLanding: Record<BallLanding, number>;
   /** Point-ending shots split by whether they won or lost the point, per stroke. */
   strokeOutcomes: Record<FinalStroke, ShotBreakdown>;
   /** Points ended at the net, by volley or overhead. */
@@ -99,6 +118,16 @@ function emptyPlayerStats(): PlayerStats {
     breakPointsFaced: 0,
     breakPointsSaved: 0,
     longestStreak: 0,
+    serviceGames: 0,
+    serviceGamesHeld: 0,
+    serviceGamesLost: 0,
+    breaks: 0,
+    firstServeReturnPoints: 0,
+    firstServeReturnPointsWon: 0,
+    secondServeReturnPoints: 0,
+    secondServeReturnPointsWon: 0,
+    serveErrorLanding: { net: 0, long: 0, side: 0 },
+    rallyErrorLanding: { net: 0, long: 0, side: 0 },
     strokeOutcomes: { forehand: emptyBreakdown(), backhand: emptyBreakdown(), neither: emptyBreakdown() },
     netPlay: emptyBreakdown(),
     rallyWins: { "1-5": 0, "6-10": 0, "11-20": 0, "21+": 0 },
@@ -150,6 +179,38 @@ export function buildStats(events: MatchEvent[], config: MatchConfig): MatchStat
     }
     if (point.payload.serveResult === "ace") server.aces += 1;
     if (point.payload.serveResult === "double_fault") server.doubleFaults += 1;
+
+    // The receiver's side of the same point, split by the serve they faced. A
+    // double fault counts as a second-serve return point: the receiver was
+    // returning second serve when they won it.
+    const facedFirstServe = point.payload.serveAttempt === 1;
+    const receiverWon = point.payload.winner === receiverKey;
+    if (facedFirstServe) {
+      receiver.firstServeReturnPoints += 1;
+      if (receiverWon) receiver.firstServeReturnPointsWon += 1;
+    } else {
+      receiver.secondServeReturnPoints += 1;
+      if (receiverWon) receiver.secondServeReturnPointsWon += 1;
+    }
+
+    // Holds and breaks, derived from the score either side of the point rather
+    // than from a separate event, so a corrected match cannot disagree with the
+    // scoreboard. A completed set resets the game score, hence the sets check.
+    const before = point.payload.scoreBefore;
+    const after = point.payload.scoreAfter;
+    const gameFinished = !before.inTiebreak && (
+      after.games[0] !== before.games[0]
+      || after.games[1] !== before.games[1]
+      || after.sets.length !== before.sets.length
+    );
+    if (gameFinished) {
+      server.serviceGames += 1;
+      if (point.payload.winner === point.payload.server) server.serviceGamesHeld += 1;
+      else {
+        server.serviceGamesLost += 1;
+        receiver.breaks += 1;
+      }
+    }
 
     if (isBreakPoint(point.payload.scoreBefore, point.payload.server, config.adScoring)) {
       receiver.breakPointsEarned += 1;
@@ -218,6 +279,13 @@ function applyDetails(
     if (details.shotSituation) player.winnerPatterns[details.shotSituation] += 1;
     if (details.advancedShotType) player.winnerPatterns[details.advancedShotType] += 1;
   }
+  // Where the error landed. Rally errors belong to whoever made them; a fault
+  // always belongs to the server, whatever the point's outcome turned out to be.
+  if (details.ballLanding && lostWithSelectedShot) player.rallyErrorLanding[details.ballLanding] += 1;
+  const server = stats[point.payload.server];
+  if (details.firstServeLanding) server.serveErrorLanding[details.firstServeLanding] += 1;
+  if (details.secondServeLanding) server.serveErrorLanding[details.secondServeLanding] += 1;
+
   if (details.rallyRange) stats[point.payload.winner].rallyWins[details.rallyRange] += 1;
   if (hasCompleteShotDetails(details)) stats.completeShotDetails += 1;
 }
