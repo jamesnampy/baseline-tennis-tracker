@@ -130,6 +130,10 @@ Required setup fields:
 - First server
 - Ad scoring switch
 
+**Pending — staging a match before the toss.** First server is a required setup field and cannot be
+changed afterwards, so a match cannot be prepared until the toss is over. Setup should be completable
+without it, with the first server chosen in the tracker immediately before the first point.
+
 Optional setup fields:
 
 - USTA tournament URL
@@ -354,6 +358,21 @@ Row 2:
 
 Advanced options appear two per line.
 
+### Ball landed
+
+Shown only for **Return Error** and **Unforced Error** outcomes, and attributed to the same
+responsible player as the error.
+
+Choices:
+
+- Net
+- Long
+- Side
+
+**Pending — ball landed on faults.** A first or second fault records no landing, so the most common
+error in the match is the one error whose placement is never captured. Ball Landed should be
+offered on both faults, attributed to the server.
+
 ### Detail completion behavior
 
 The details tray contains four independent sections:
@@ -387,6 +406,11 @@ Each mental-state event stores:
 - Linked most-recent point
 - Capture moment: after point, game end, set end, or manual
 - Optional reason and note
+
+**Pending — capture at game and set boundaries.** Only after-point and manual capture are produced.
+The end-of-game reminder is specified above and does not exist, and `linkedPointGroupId` is set only
+while a point entry is open, so an observation recorded between points is stored with no link to the
+point it followed.
 
 These are parent observations, not psychological diagnoses.
 
@@ -465,6 +489,17 @@ Live statistics compare both players and update after every event.
 - Shot-type and advanced shot-type outcomes
 - Points won by rally-length range
 
+**Pending — metrics specified above but not computed.** Holds and breaks; service games held and
+broken; first-serve return points won; second-serve return points won. Nothing in the statistics
+projection accumulates them.
+
+**Pending — metrics computed but not shown on the Stats screen.** Points won by rally-length range
+reaches the coach report and the export, not the app.
+
+**Pending — a ball-landed statistic.** Landing is captured per point and surfaced nowhere. It should
+be reported as two separate breakdowns, because a serve into the net and a groundstroke into the net
+are different mistakes: one for serve errors, one for every other error.
+
 ### Pressure situations and points won
 
 Pressure context is derived from the score snapshot immediately before each point and the active match-format rules. The app reports, separately for both players:
@@ -527,6 +562,10 @@ Every recorded point appears in sequence and stores or derives:
 - Whether the point was tracked, corrected, imported, or reconstructed
 
 Mental-state changes, score synchronizations, game completion, set completion, corrections, and retirements also appear in the timeline.
+
+**Pending — stored fields absent from the timeline row.** Serve attempt and result, the
+final-stroke player, the responsible player, and the mental-state context are all recorded on the
+point and none are displayed. First versus second serve is the most useful of them.
 
 ## 14. On-demand LLM strategy review
 
@@ -739,35 +778,59 @@ Delivered since version 1.2, and specified in the sections named:
 - ~~Hosted coach reports~~ — delivered as private pages. Section 18.
 - ~~Account authentication~~ — delivered as a single account password. Section 24.
 
-Outstanding, in the order they are likely to matter. Items marked *(v2 §n)* were folded in from
-the superseded version 2 draft:
+Outstanding work, in two tiers. The first comes from tracking real matches and is what the product
+owner is actually waiting on. The second is the standing backlog; items marked *(v2 §n)* were folded
+in from the superseded version 2 draft.
 
-1. **Pending** — The live link is created only from the Reports screen, and its URL is displayed
-   once as plain text. It should be creatable from the Match tab during tracking, with a copy
-   control. Section 26. *(the most-requested change in day-to-day use)*
-2. **Pending** — Cross-match export in a single request. Every data route is scoped to one match;
+### Next — raised from courtside use
+
+Recorded while tracking real matches, and ahead of the backlog below. Each is specified in the
+section named.
+
+1. **The live link is created only from the Reports screen**, and its URL is shown once as plain
+   text. It should be creatable from the Match tab during tracking, with a copy control and a native
+   share where the platform offers one. Section 26.
+2. **A match cannot be staged before the toss.** First server is required at setup and cannot be
+   changed later, so setup has to wait until the toss is done. Section 4.
+3. **Ball Landed is not offered on faults**, so the match's most common error never records where it
+   landed. Section 8.
+4. **Ball Landed is reported nowhere.** It should appear as two breakdowns — serve errors, and every
+   other error. Section 11.
+5. **Holds and breaks, and service games held and broken**, are specified and not computed.
+   Section 11.
+6. **First-serve and second-serve return points won** are specified and not computed. Section 11.
+7. **No end-of-game mental-state reminder**, and an observation recorded between points is not linked
+   to the point it followed. Section 9.
+8. **Points won by rally-length range** reaches the coach report but not the Stats screen.
+   Section 11.
+9. **Serve attempt and result do not appear on the timeline row**, nor does the player a shot was
+   attributed to. Section 13.
+
+### Later
+
+1. **Pending** — Cross-match export in a single request. Every data route is scoped to one match;
    bulk retrieval loops per match. *(v2 §11)*
-3. **Pending** — Tournament, season, and opponent trend analysis. A tournament key is stored and
+2. **Pending** — Tournament, season, and opponent trend analysis. A tournament key is stored and
    filterable, but nothing aggregates across matches. *(v2 §10)*
-4. **Pending** — A shared report should be an immutable snapshot of the data as it stood when the
+3. **Pending** — A shared report should be an immutable snapshot of the data as it stood when the
    link was created. Storing the event cutoff on the link would close this. *(v2 §12)*
-5. **Pending** — Show the stale-strategy-review flag in the app. It already reaches exports and the
+4. **Pending** — Show the stale-strategy-review flag in the app. It already reaches exports and the
    API. *(section 14)*
-6. **Pending** — Download to a second device. Synchronization is push-only by choice; the dataset
+5. **Pending** — Download to a second device. Synchronization is push-only by choice; the dataset
    reaches a laptop through the download script. *(v2 §7)*
-7. **Pending** — A retirement control, so `player_retired` can actually be emitted. *(section 4)*
-8. **Pending** — Cloud data deletion on request. Match deletion is device-local; no route removes a
+6. **Pending** — A retirement control, so `player_retired` can actually be emitted. *(section 4)*
+7. **Pending** — Cloud data deletion on request. Match deletion is device-local; no route removes a
    match from D1. *(v2 §13)*
-9. **Pending** — Re-import validation for an exported bundle. *(section 17, v2 §11)*
-10. **Pending** — Preview deployments, migrations applied by the pipeline, and post-deploy smoke
-    checks. Section 27. *(v2 §15)*
-11. **Pending** — A browser test for sign-in, and mobile-viewport tests. *(v2 §14)*
-12. **Pending** — Advanced profile merge suggestions and duplicate-player detection.
-13. **Pending** — Automated USTA tournament metadata import — **blocked, see section 23**.
-14. **Pending** — Apple Watch input.
-15. **Pending** — Native iOS packaging or SwiftUI client.
-16. **Pending** — Video synchronization and court-placement diagrams.
-17. **Pending** — Advanced coaching and practice-plan generation.
+8. **Pending** — Re-import validation for an exported bundle. *(section 17, v2 §11)*
+9. **Pending** — Preview deployments, migrations applied by the pipeline, and post-deploy smoke
+   checks. Section 27. *(v2 §15)*
+10. **Pending** — A browser test for sign-in, and mobile-viewport tests. *(v2 §14)*
+11. **Pending** — Advanced profile merge suggestions and duplicate-player detection.
+12. **Pending** — Automated USTA tournament metadata import — **blocked, see section 23**.
+13. **Pending** — Apple Watch input.
+14. **Pending** — Native iOS packaging or SwiftUI client.
+15. **Pending** — Video synchronization and court-placement diagrams.
+16. **Pending** — Advanced coaching and practice-plan generation.
 
 ## 22. Experience reference
 
