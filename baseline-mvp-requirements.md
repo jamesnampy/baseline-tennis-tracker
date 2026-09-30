@@ -6,6 +6,22 @@
 **Product type:** Mobile-first installable web application (PWA)  
 **Deployment:** Cloudflare Workers at `baseline.jamesvibecode.com`
 
+## How to read this document
+
+Sections 1–23 are the MVP and its analysis. Sections 24–28 are the cloud generation built
+afterwards, absorbed here from a separate version 2 draft that this document now supersedes.
+
+Every requirement that is not simply delivered carries one of four tags:
+
+- **Delivered** — built, and covered by the automated suite unless noted.
+- **Partial** — built in part; the specific gap is named, never left implied.
+- **Pending** — not built. Either deliberately deferred or known and unscheduled.
+- **Retired** — specified once and deliberately not being built. The reason is always given,
+  so a future reader can reverse the decision knowingly rather than rediscover the question.
+
+An untagged requirement in sections 1–20 is delivered. Section 0 records everything that
+changed since version 1.2 and everything still open.
+
 ## 0. Implementation status
 
 Sections 1–20 describe the MVP and are implemented unless noted here. This section records what changed since version 1.2 and what remains open. Where the build deviates from a stated requirement, the deviation is named rather than quietly folded into the text.
@@ -52,6 +68,25 @@ Known gaps, not yet scheduled:
 6. **A stale strategy review is computed but not shown in the app.** Section 14 requires a review to be marked stale once a point it analyzed is undone. The flag reaches exports and the API only.
 7. **A report link renders the match as it stands when opened**, not as it stood when the link was created. Section 18 requires a shared report to be an immutable snapshot, with corrections producing a new version rather than silently changing what a coach already reviewed. Storing the event cutoff on the link would close this.
 8. **Sign-in has no automated browser test.** The API flow is covered end to end; the browser path is verified by hand.
+
+### The version 2 draft
+
+A separate `baseline-v2-requirements.md` once specified this cloud generation: accounts, family
+workspaces and roles, centralized profiles, an offline outbox, scoring leases, live spectators,
+hosted reports, and a CI/CD pipeline. It named Vercel and Supabase as the architecture.
+
+That draft was never committed to the repository and is now superseded by this document. Its
+requirements were reviewed one at a time against the build and dispositioned:
+
+- What shipped is recorded above under *Delivered beyond the MVP* and specified in sections 24–27.
+- What is still wanted is folded into section 21 and tagged **Pending** in sections 24–27.
+- What is deliberately not being built is listed in section 28 with the reason, rather than
+  disappearing silently.
+
+The draft's goals largely landed. Its architecture did not: none of Vercel, Supabase Postgres,
+Supabase Auth, Supabase Realtime, or row-level security is used. The equivalent guarantees come
+from Cloudflare Workers, D1, a Durable Object per match, and server-side redaction. Where the
+draft's mechanism is gone but its guarantee is met, section 28 says so.
 
 ## 1. Product purpose
 
@@ -693,23 +728,46 @@ The MVP is complete when:
 22. A user can generate a mobile-friendly, self-contained coach report containing the selected result, statistics, evidence-based analysis, timeline, and mental-state progression.
 23. A hosted coach-report link requires explicit sharing, exposes only the selected report, and can be revoked without affecting the underlying match.
 
-## 21. Future enhancements
+## 21. Roadmap
 
-Delivered since version 1.2:
+Delivered since version 1.2, and specified in the sections named:
 
-- ~~Encrypted cloud backup and cross-device synchronization~~ — delivered as push-only synchronization to Cloudflare D1. Matches are never synchronized back down to a second device, by choice; a laptop obtains the dataset through the download script.
-- ~~Live sharing with another spectator~~ — delivered as revocable, expiring, server-redacted live links.
+- ~~Encrypted cloud backup and cross-device synchronization~~ — delivered push-only. Section 25.
+- ~~Live sharing with another spectator~~ — delivered as revocable, expiring, server-redacted
+  links that update over a WebSocket. Section 26.
+- ~~Hosted read-only API access~~ — delivered at `/api/v1`. Section 17.
+- ~~Hosted coach reports~~ — delivered as private pages. Section 18.
+- ~~Account authentication~~ — delivered as a single account password. Section 24.
 
-Outstanding, in the order they are likely to matter:
+Outstanding, in the order they are likely to matter. Items marked *(v2 §n)* were folded in from
+the superseded version 2 draft:
 
-- Cross-match export in a single request
-- Tournament, season, and opponent trend analysis
-- Advanced profile merge suggestions and duplicate-player detection
-- Automated USTA tournament metadata import when permitted — **blocked, see section 23**
-- Apple Watch input
-- Native iOS packaging or SwiftUI client
-- Video synchronization and court-placement diagrams
-- Advanced coaching and practice-plan generation
+1. **Pending** — The live link is created only from the Reports screen, and its URL is displayed
+   once as plain text. It should be creatable from the Match tab during tracking, with a copy
+   control. Section 26. *(the most-requested change in day-to-day use)*
+2. **Pending** — Cross-match export in a single request. Every data route is scoped to one match;
+   bulk retrieval loops per match. *(v2 §11)*
+3. **Pending** — Tournament, season, and opponent trend analysis. A tournament key is stored and
+   filterable, but nothing aggregates across matches. *(v2 §10)*
+4. **Pending** — A shared report should be an immutable snapshot of the data as it stood when the
+   link was created. Storing the event cutoff on the link would close this. *(v2 §12)*
+5. **Pending** — Show the stale-strategy-review flag in the app. It already reaches exports and the
+   API. *(section 14)*
+6. **Pending** — Download to a second device. Synchronization is push-only by choice; the dataset
+   reaches a laptop through the download script. *(v2 §7)*
+7. **Pending** — A retirement control, so `player_retired` can actually be emitted. *(section 4)*
+8. **Pending** — Cloud data deletion on request. Match deletion is device-local; no route removes a
+   match from D1. *(v2 §13)*
+9. **Pending** — Re-import validation for an exported bundle. *(section 17, v2 §11)*
+10. **Pending** — Preview deployments, migrations applied by the pipeline, and post-deploy smoke
+    checks. Section 27. *(v2 §15)*
+11. **Pending** — A browser test for sign-in, and mobile-viewport tests. *(v2 §14)*
+12. **Pending** — Advanced profile merge suggestions and duplicate-player detection.
+13. **Pending** — Automated USTA tournament metadata import — **blocked, see section 23**.
+14. **Pending** — Apple Watch input.
+15. **Pending** — Native iOS packaging or SwiftUI client.
+16. **Pending** — Video synchronization and court-placement diagrams.
+17. **Pending** — Advanced coaching and practice-plan generation.
 
 ## 22. Experience reference
 
@@ -738,3 +796,138 @@ If access is ever granted, the integration must satisfy:
 - Import is user-initiated and its coverage contribution is disclosed like any other data source.
 
 A user-supplied import — the user shares or pastes a draw they are already looking at, and Baseline parses it without contacting USTA — is the only form available today, and the only one that delivers data at the moment setup needs it. It is a separate requirement and should be scoped on its own merits.
+
+## 24. Accounts and sessions
+
+**Status: delivered, with the version 2 draft's identity model retired.**
+
+- A single account password gates every hosted route. It is stored only as a PBKDF2-HMAC-SHA256
+  hash, never in recoverable form, and is exchanged at sign-in for an HttpOnly session cookie.
+- Sessions survive ordinary browser restarts and can be ended by signing out.
+- Failed sign-ins are throttled per IP. A 12-character minimum applies.
+- A signed-out visitor can open only an explicitly shared spectator or report link, and nothing else.
+- Junior-player profiles are records, not accounts, and never require a login.
+
+**Partial — roles.** Spectator and report-viewer exist as distinct share-link kinds, each carrying
+its own privacy settings, enforced server-side. Owner and Tracker are not distinguished, because a
+single account holder is both.
+
+**Pending — cloud data deletion.** Deleting a match removes the device-local record. No route
+removes it from D1.
+
+**Retired — email magic link or one-time-password sign-in** *(v2 §4)*. A single-household product
+does not need an identity provider or an email delivery dependency, and a password the account
+holder already controls is simpler to reason about than a mail round-trip at courtside.
+
+**Retired — family workspaces and member invitations** *(v2 §4)*. There is one account holder.
+Workspace ownership columns, invitations, and cross-workspace isolation would be structure with no
+second member to isolate. If a second adult ever needs access, this decision is the thing to revisit
+first, because it is the assumption every other authorization shortcut rests on.
+
+## 25. Cloud synchronization
+
+**Status: delivered push-only.**
+
+- Cloud sync is off until explicitly enabled. Tracking never depends on it.
+- Every locally accepted action is assigned a stable event id before the interface advances, and is
+  queued in an outbox that survives refresh and browser termination.
+- Queued events upload in local order. Retries are idempotent by event id, so a repeated push cannot
+  duplicate a point.
+- Each match's appends are serialized by its own Durable Object, so server sequence numbers are
+  assigned without racing and without retry loops.
+- The outbox never mutates the local event log. The device remains authoritative during a match.
+- A push carries credentials; an unauthenticated push reports the reason and keeps every event
+  queued rather than discarding it.
+- Only the profiles and identity mappings a match actually references are pushed with it.
+- Queued matches flush oldest first and stop cleanly when the connection drops.
+
+**Pending — download to a second device.** Nothing is ever synchronized back down. This is
+deliberate for a phone-first workflow; a laptop obtains the dataset through `npm run pull`. It is
+also the single largest departure from the version 2 draft, which assumed two-way sync.
+
+**Pending — the full synchronization state indicator** *(v2 §7)*. The draft asked for five visible
+states: Saved on device, Syncing, Synced, Offline, and Needs attention. Saved-on-device, offline,
+and a queued count are surfaced; the rest are not distinguished.
+
+**Pending — a source device id on every event** *(v2 §6)*. Events carry id, match id, schema
+version, sequence, timestamp, and source type, but not the device that produced them. With one
+tracking device this is unobservable; it becomes necessary the moment a second one appears.
+
+**Retired — the scoring lease, heartbeat, and transfer** *(v2 §7)*. One device scores a match and
+nothing else may append to it, so there is no second writer to arbitrate. The lease was machinery
+for a concurrency case that push-only single-device tracking does not create.
+
+**Retired — the reviewable conflict queue** *(v2 §7)*. With a single writer appending immutable
+events keyed by event id, the divergent histories the queue was designed to reconcile cannot arise.
+Reinstate it together with two-way sync, never separately.
+
+## 26. Live spectator links
+
+**Status: delivered.**
+
+- A Tracker can create a read-only link for one match. The token is unguessable and scoped to that
+  match alone.
+- The link carries an optional expiry and can be revoked. Revocation blocks new access and ends
+  active WebSocket subscriptions.
+- A spectator needs no account.
+- The view shows the score, both-player statistics, and the timeline — and nothing else. No point
+  entry, undo, correction, profile, export, or sharing control exists on it.
+- Each socket carries its own link's privacy settings, so redaction is per connection. Two
+  spectators holding links with different settings see different things, and neither can widen what
+  they receive by anything they send.
+- Updates arrive over a WebSocket, with polling as a fallback. The view labels its connection state
+  — Live, Updating, Connecting, or Disconnected — so a stalled feed is visible rather than silent.
+- Replayed events are deduplicated by id.
+- Sharing a match never transfers scoring control.
+
+**Pending — where the link lives.** It can only be created from the Reports screen, which means
+leaving the tracker mid-match, returning to the home screen, and selecting the match. It should be
+creatable from the Match tab while tracking.
+
+**Pending — a copy control.** The created URL is rendered once as plain text, so it has to be
+selected by hand on a phone, and it is never shown again. A copy action, and a native share action
+where the platform offers one, are both missing.
+
+**Retired — named-recipient access** *(v2 §9)*. An unguessable, revocable, expiring token is the
+whole access model. Per-recipient identity would require the account system section 24 retires.
+
+## 27. Deployment and operations
+
+**Status: partial.**
+
+- `wrangler.jsonc` is the committed deployment configuration, and a test asserts its shape.
+- The production domain is provisioned by the first deploy, including its DNS record and
+  certificate. The `workers.dev` hostname is disabled so one canonical origin serves the app.
+- `npm run setup:cloudflare` provisions the D1 database and records its id. `npm run deploy` builds
+  and releases in one command.
+- Continuous integration runs on every push and pull request: install from the committed lockfile,
+  tests, typecheck, lint, and a production build.
+- Observability is enabled on the Worker.
+
+**Pending — the pipeline does not deploy** *(v2 §15)*. Releases are run by hand from a developer
+machine. Preview deployments, migrations applied by the pipeline, post-deploy smoke checks against
+the production origin, and a recorded release history are all absent. Nothing currently blocks a
+release whose migrations have not been applied.
+
+**Pending — a health endpoint** *(v2 §16)*, and correlation ids on client errors.
+
+**Retired — Vercel preview environments and Supabase preview branches** *(v2 §3, §15)*. Neither
+platform is used. The equivalent, if it is ever wanted, is a second Worker environment and a
+separate D1 database.
+
+## 28. Requirements retired from the version 2 draft
+
+Recorded so these decisions can be reversed knowingly rather than rediscovered. Each is specified in
+full in the section named.
+
+| Retired | Reason | Where |
+|---|---|---|
+| Vercel hosting; Supabase Postgres, Auth, and Realtime | Built on Cloudflare Workers, D1, and a Durable Object per match. The guarantees the draft wanted — a centralized store, authentication, and live fan-out — are met by different mechanisms. | 3, 25, 26 |
+| Row-level security on every user table | D1 has no row-level security. Authorization is enforced in the Worker instead: one account gates every private route, and every shared response is redacted server-side against that link's settings. The guarantee holds; the mechanism differs. | 24, 26 |
+| Email magic link or one-time-password sign-in | A single account password, already controlled by the account holder, with no mail dependency at courtside. | 24 |
+| Family workspaces, member invitations, cross-workspace isolation | One account holder. Revisit this first if a second adult ever needs access. | 24 |
+| Owner and Tracker as separate roles | The same person. Spectator and report-viewer are real and enforced. | 24 |
+| Scoring lease, heartbeat, and transfer | Single-device, push-only tracking creates no second writer to arbitrate. | 25 |
+| Reviewable conflict queue | Immutable events keyed by event id from one writer cannot diverge. Reinstate with two-way sync, not before. | 25 |
+| Named-recipient share access | The access model is the unguessable, revocable, expiring token. | 26 |
+| Existing-device migration flow | There was no prior cloud to migrate from. The first push uploads the device's history, idempotently, which is the outcome the draft's import wizard was specifying. | 25 |
