@@ -25,6 +25,8 @@ import {
 } from "@/lib/tennis/sync";
 
 type Tab = "track" | "stats" | "timeline" | "match";
+/** Recorded on every strategy request and review, so older ones stay attributable. */
+const PROMPT_VERSION = "strategy-v2";
 type TrackStage = "serve" | "winner" | "outcome" | "details" | "serve_landing";
 
 const mentalLabels: Record<MentalState, string> = {
@@ -370,14 +372,18 @@ function MatchTracker({ match, setMatch, saved, onExit }: { match: MatchRecord; 
   async function generateStrategy() {
     const fallback = strategyReview(stats, match.config);
     let result = { ...fallback, provider: "on-device", model: "evidence-engine-v1" };
-    const question = "Given the collected dataset for both my player and the opponent through the current point, what is the recommended strategy for my player?";
+    const question = "Given the collected dataset for both my player and the opponent through the current point, what is the recommended strategy for my player? Use both players' data: what my player should press, what the opponent is giving away, and what my player has to protect.";
     // Requirements section 15 pairs every review with its request. Both events are
     // appended together after the round trip so a single setMatch keeps them ordered.
     const requestId = makeId(); const requestedAt = new Date().toISOString(); const cutoffSequence = match.events.length;
     try {
       const response = await fetch("/api/strategy", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
         question,
-        dataset: { config: match.config, score, stats, mentalStates: mental, points: points.map((point) => ({ ...point.payload, details: detailMap.get(point.pointGroupId) })) },
+        dataset: {
+          config: match.config, score, stats, mentalStates: mental,
+          pressure: buildPressureAnalytics(match),
+          points: points.map((point) => ({ ...point.payload, details: detailMap.get(point.pointGroupId) })),
+        },
       }) });
       if (response.ok) {
         const payload = await response.json() as { response: string; provider: string; model: string };
@@ -385,8 +391,8 @@ function MatchTracker({ match, setMatch, saved, onExit }: { match: MatchRecord; 
       }
     } catch { /* Offline and unconfigured deployments use the transparent local fallback. */ }
     append([
-      { ...eventBase(match), timestamp: requestedAt, source: "analysis", type: "strategy_requested", payload: { requestId, cutoffSequence, question, promptVersion: "strategy-v1", coverage: stats.coverage } },
-      { ...eventBase(match, 2), source: "analysis", type: "strategy_generated", payload: { cutoffSequence, provider: result.provider, model: result.model, promptVersion: "strategy-v1", response: result.response, evidence: result.evidence, coverage: stats.coverage, requestId, requestedAt } },
+      { ...eventBase(match), timestamp: requestedAt, source: "analysis", type: "strategy_requested", payload: { requestId, cutoffSequence, question, promptVersion: PROMPT_VERSION, coverage: stats.coverage } },
+      { ...eventBase(match, 2), source: "analysis", type: "strategy_generated", payload: { cutoffSequence, provider: result.provider, model: result.model, promptVersion: PROMPT_VERSION, response: result.response, evidence: result.evidence, coverage: stats.coverage, requestId, requestedAt } },
     ]);
     return result;
   }
