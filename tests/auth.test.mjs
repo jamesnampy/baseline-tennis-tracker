@@ -18,6 +18,7 @@ import {
   verifyPassword,
   verifySession,
 } from "../worker/api/auth.ts";
+import { hashPassword as scriptHashPassword } from "../scripts/set-password.mjs";
 
 // The real cost is deliberate; tests use a cheap one so they stay fast.
 const CHEAP = 1000;
@@ -124,4 +125,29 @@ test("a hash demanding more work than the runtime allows is refused, not thrown"
   // escaping as an exception and turning every login into a 500.
   const unusable = `pbkdf2$${MAX_SUPPORTED_ITERATIONS + 1}$c2FsdHNhbHRzYWx0c2E=$aGFzaGhhc2hoYXNoaGFzaGhhc2hoYXNoaGFzaA==`;
   assert.equal(await verifyPassword("anything", unusable), false);
+});
+
+/**
+ * The setup scripts derive the stored hash in Node; the Worker verifies it with
+ * WebCrypto. If those two ever drift — a different iteration count, salt length,
+ * or base64 flavour — sign-in fails permanently and looks exactly like a
+ * forgotten password. This runs one against the other.
+ */
+test("a password hashed by the setup script verifies inside the worker", async () => {
+  const stored = scriptHashPassword("a-sufficiently-long-password");
+  assert.match(stored, /^pbkdf2\$100000\$[^$]+\$[^$]+$/, "the stored shape the worker parses");
+  assert.equal(await verifyPassword("a-sufficiently-long-password", stored), true);
+  assert.equal(await verifyPassword("the-wrong-password-entirely", stored), false);
+});
+
+test("a password stored in place of its hash can never authenticate", async () => {
+  // The mistake the script exists to prevent: `wrangler secret put` stores
+  // whatever it is handed, so a typed password is accepted and then matches
+  // nothing, for any input, forever.
+  for (const attempt of ["my-real-password", "", "anything"]) {
+    assert.equal(await verifyPassword(attempt, "my-real-password"), false);
+  }
+  // Nor can a hash with an unsupported cost, which this runtime cannot verify.
+  assert.equal(await verifyPassword("x", "pbkdf2$999999999$c2FsdA==$aGFzaA=="), false);
+  assert.equal(await verifyPassword("x", "pbkdf2$500$c2FsdA==$aGFzaA=="), false);
 });
