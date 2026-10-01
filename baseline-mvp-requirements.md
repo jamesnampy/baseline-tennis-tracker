@@ -811,6 +811,9 @@ Delivered since version 1.2, and specified in the sections named:
 - ~~Serve attempt, result, and shot attribution on the timeline row~~. Section 13.
 - ~~Scoped coach-report statistics, with the timeline on its own tab~~ — the same scopes the Stats
   screen offers, from one shared definition. Sections 11 and 18.
+- ~~One definition of the statistics rows for both the Stats screen and the coach report~~ — neither
+  can carry a metric the other lacks, every rate shows its numerator and denominator, and pressure
+  now appears on the Stats screen for the first time. Sections 11, 12 and 18.
 
 Outstanding work, in two tiers. The first comes from tracking real matches and is what the product
 owner is actually waiting on. The second is the standing backlog; items marked *(v2 §n)* were folded
@@ -829,36 +832,29 @@ below is next unless courtside use turns up something new.
    its own, so it described neither the chosen profile nor a knowable match; it has been removed.
    What belongs there is pressure, serve, return, and shot performance aggregated across every match
    the profile appears in — the first useful slice of trend analysis. *(section 4)*
-2. **Pending** — One shared definition of the statistics tables. The Stats screen and the coach report
-   each build their own rows, and they have drifted: the screen alone carries service games held,
-   breaks won, first- and second-serve return points won, and error placement, while the report alone
-   carries break points saved and pressure. Scope selection was unified behind `statsScopeOptions`
-   for exactly this reason; the rows should follow, with the report's numerator-and-denominator
-   formatting adopted in both, since section 12 asks for a sample size beside every metric anyway.
-   *(sections 11, 12 and 18)*
-3. **Pending** — Cross-match export in a single request. Every data route is scoped to one match;
+2. **Pending** — Cross-match export in a single request. Every data route is scoped to one match;
    bulk retrieval loops per match. *(v2 §11)*
-4. **Pending** — Tournament, season, and opponent trend analysis. A tournament key is stored and
+3. **Pending** — Tournament, season, and opponent trend analysis. A tournament key is stored and
    filterable, but nothing aggregates across matches. *(v2 §10)*
-5. **Pending** — A shared report should be an immutable snapshot of the data as it stood when the
+4. **Pending** — A shared report should be an immutable snapshot of the data as it stood when the
    link was created. Storing the event cutoff on the link would close this. *(v2 §12)*
-6. **Pending** — Show the stale-strategy-review flag in the app. It already reaches exports and the
+5. **Pending** — Show the stale-strategy-review flag in the app. It already reaches exports and the
    API. *(section 14)*
-7. **Pending** — Download to a second device. Synchronization is push-only by choice; the dataset
+6. **Pending** — Download to a second device. Synchronization is push-only by choice; the dataset
    reaches a laptop through the download script. *(v2 §7)*
-8. **Pending** — A retirement control, so `player_retired` can actually be emitted. *(section 4)*
-9. **Pending** — Cloud data deletion on request. Match deletion is device-local; no route removes a
+7. **Pending** — A retirement control, so `player_retired` can actually be emitted. *(section 4)*
+8. **Pending** — Cloud data deletion on request. Match deletion is device-local; no route removes a
    match from D1. *(v2 §13)*
-10. **Pending** — Re-import validation for an exported bundle. *(section 17, v2 §11)*
-11. **Pending** — Preview deployments, migrations applied by the pipeline, and post-deploy smoke
+9. **Pending** — Re-import validation for an exported bundle. *(section 17, v2 §11)*
+10. **Pending** — Preview deployments, migrations applied by the pipeline, and post-deploy smoke
    checks. Section 27. *(v2 §15)*
-12. **Pending** — A browser test for sign-in, and mobile-viewport tests. *(v2 §14)*
-13. **Pending** — Advanced profile merge suggestions and duplicate-player detection.
-14. **Pending** — Automated USTA tournament metadata import — **blocked, see section 23**.
-15. **Pending** — Apple Watch input.
-16. **Pending** — Native iOS packaging or SwiftUI client.
-17. **Pending** — Video synchronization and court-placement diagrams.
-18. **Pending** — Advanced coaching and practice-plan generation.
+11. **Pending** — A browser test for sign-in, and mobile-viewport tests. *(v2 §14)*
+12. **Pending** — Advanced profile merge suggestions and duplicate-player detection.
+13. **Pending** — Automated USTA tournament metadata import — **blocked, see section 23**.
+14. **Pending** — Apple Watch input.
+15. **Pending** — Native iOS packaging or SwiftUI client.
+16. **Pending** — Video synchronization and court-placement diagrams.
+17. **Pending** — Advanced coaching and practice-plan generation.
 
 
 ## 22. Experience reference

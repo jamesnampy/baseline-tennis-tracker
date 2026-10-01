@@ -10,12 +10,13 @@
  * Every rate prints its numerator and denominator alongside the percentage,
  * because section 18 requires the sample behind each number to be visible.
  */
+import { buildStats, filterEventsForStatsScope, statsScopeOptions, strategyReview, type StatsScope } from "./analytics.ts";
 import {
-  buildStats, filterEventsForStatsScope, percentage, shotImpact, statsScopeOptions, strategyReview,
-  type MatchStats, type ShotBreakdown, type StatsScope,
-} from "./analytics.ts";
+  landingRows, matchRows, pressureRows, rallyRows, shotRows, SHOT_LABELS,
+  type StatCell, type StatRow,
+} from "./stattables.ts";
 import { DATASET_VERSION } from "./model.ts";
-import type { MatchRecord, PlayerKey, ShotType } from "./model.ts";
+import type { MatchRecord, PlayerKey } from "./model.ts";
 import { buildPressureAnalytics } from "./pressure.ts";
 import { activePointEvents, pointDetailsMap, projectScore, scoreSummary } from "./scoring.ts";
 
@@ -42,71 +43,13 @@ export const DEFAULT_REPORT_OPTIONS: CoachReportOptions = {
 const esc = (value: unknown) =>
   String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 
-/** Section 18: a rate is never shown without the sample it came from. */
-const rate = (numerator: number, denominator: number) =>
-  denominator ? `${numerator}/${denominator} (${percentage(numerator, denominator)})` : "— (n=0)";
+/** A cell keeps its sample beside it, muted, rather than losing it. */
+const cell = (value: StatCell) =>
+  `${esc(value.value)}${value.detail ? ` <span class="muted">(${esc(value.detail)})</span>` : ""}`;
 
-const signed = (value: number) => `${value >= 0 ? "+" : ""}${value}`;
-const impactCell = (breakdown: ShotBreakdown) =>
-  breakdown.total ? `${signed(shotImpact(breakdown))} <span class="muted">(${breakdown.winners}W−${breakdown.errors}E, n=${breakdown.total})</span>` : `— <span class="muted">(n=0)</span>`;
-
-const SHOT_TYPES: ShotType[] = ["groundstroke", "slice", "volley", "drop_shot", "lob", "overhead"];
-const SHOT_LABELS: Record<string, string> = {
-  groundstroke: "Groundstroke", slice: "Slice", volley: "Volley", drop_shot: "Drop shot",
-  lob: "Lob", overhead: "Overhead", approach_shot: "Approach shot", passing_shot: "Passing shot",
-  cross_court: "Cross-court", inside_out: "Inside-out", inside_in: "Inside-in",
-};
-const RALLY_RANGES = ["1-5", "6-10", "11-20", "21+"] as const;
-const WINNER_PATTERNS = ["approach_shot", "passing_shot", "cross_court", "inside_out", "inside_in"] as const;
-
-function statRows(stats: MatchStats): [string, string, string][] {
-  const side = (key: PlayerKey) => stats[key];
-  return [
-    ["Points won", String(side("my").pointsWon), String(side("opponent").pointsWon)],
-    ["Service points won", rate(side("my").servicePointsWon, side("my").servicePoints), rate(side("opponent").servicePointsWon, side("opponent").servicePoints)],
-    ["Return points won", rate(side("my").returnPointsWon, side("opponent").servicePoints), rate(side("opponent").returnPointsWon, side("my").servicePoints)],
-    ["First serves in", rate(side("my").firstServesIn, side("my").servicePoints), rate(side("opponent").firstServesIn, side("opponent").servicePoints)],
-    ["First-serve points won", rate(side("my").firstServePointsWon, side("my").firstServesIn), rate(side("opponent").firstServePointsWon, side("opponent").firstServesIn)],
-    ["Second-serve points won", rate(side("my").secondServePointsWon, side("my").secondServePoints), rate(side("opponent").secondServePointsWon, side("opponent").secondServePoints)],
-    ["Aces", String(side("my").aces), String(side("opponent").aces)],
-    ["Double faults", String(side("my").doubleFaults), String(side("opponent").doubleFaults)],
-    ["Break points converted", rate(side("my").breakPointsConverted, side("my").breakPointsEarned), rate(side("opponent").breakPointsConverted, side("opponent").breakPointsEarned)],
-    ["Break points saved", rate(side("my").breakPointsSaved, side("my").breakPointsFaced), rate(side("opponent").breakPointsSaved, side("opponent").breakPointsFaced)],
-    ["Longest point streak", String(side("my").longestStreak), String(side("opponent").longestStreak)],
-  ];
-}
-
-function shotRows(stats: MatchStats): [string, string, string][] {
-  const side = (key: PlayerKey) => stats[key];
-  return [
-    ["Forehand impact", impactCell(side("my").strokeOutcomes.forehand), impactCell(side("opponent").strokeOutcomes.forehand)],
-    ["Backhand impact", impactCell(side("my").strokeOutcomes.backhand), impactCell(side("opponent").strokeOutcomes.backhand)],
-    ["Net conversion", rate(side("my").netPlay.winners, side("my").netPlay.total), rate(side("opponent").netPlay.winners, side("opponent").netPlay.total)],
-    ["Return quality", `${signed(side("my").returnWinners - side("my").returnErrors)} (${side("my").returnWinners}W−${side("my").returnErrors}E)`, `${signed(side("opponent").returnWinners - side("opponent").returnErrors)} (${side("opponent").returnWinners}W−${side("opponent").returnErrors}E)`],
-    ["Winners", String(side("my").winners), String(side("opponent").winners)],
-    ["Errors forced", String(side("my").forcedErrors), String(side("opponent").forcedErrors)],
-    ["Unforced errors", String(side("my").unforcedErrors), String(side("opponent").unforcedErrors)],
-    ...SHOT_TYPES.map((type): [string, string, string] => [
-      SHOT_LABELS[type]!,
-      impactCell(side("my").shotTypeOutcomes[type]),
-      impactCell(side("opponent").shotTypeOutcomes[type]),
-    ]),
-    ...RALLY_RANGES.map((range): [string, string, string] => [
-      `Points won · ${range} shots`,
-      String(side("my").rallyWins[range] ?? 0),
-      String(side("opponent").rallyWins[range] ?? 0),
-    ]),
-    ...WINNER_PATTERNS.map((pattern): [string, string, string] => [
-      `${SHOT_LABELS[pattern]} winners`,
-      String(side("my").winnerPatterns[pattern]),
-      String(side("opponent").winnerPatterns[pattern]),
-    ]),
-  ];
-}
-
-const table = (left: string, right: string, rows: [string, string, string][]) =>
+const table = (left: string, right: string, rows: StatRow[]) =>
   `<table><thead><tr><th>Statistic</th><th>${esc(left)}</th><th>${esc(right)}</th></tr></thead><tbody>${
-    rows.map(([label, a, b]) => `<tr><td>${esc(label)}</td><td>${a}</td><td>${b}</td></tr>`).join("")
+    rows.map((entry) => `<tr><td>${esc(entry.label)}</td><td>${cell(entry.my)}</td><td>${cell(entry.opponent)}</td></tr>`).join("")
   }</tbody></table>`;
 
 export function buildCoachReport(match: MatchRecord, options: CoachReportOptions = DEFAULT_REPORT_OPTIONS) {
@@ -152,12 +95,13 @@ export function buildCoachReport(match: MatchRecord, options: CoachReportOptions
     const scoped = scope === "total" ? match.events : filterEventsForStatsScope(match.events, match.config, scope);
     const scopeStats = buildStats(scoped, match.config);
     const scopePressure = buildPressureAnalytics({ ...match, events: scoped });
-    const pressureFor = (key: PlayerKey) => rate(scopePressure[key].won, scopePressure[key].played);
     return `<div class="scope-panel${index === 0 ? " on" : ""}" id="scope-${String(scope).replaceAll("_", "-")}">`
-      + (options.matchStats ? `<section class="card"><h2>Match statistics</h2><div class="scroll">${table(match.config.myPlayerName, opponent, statRows(scopeStats))}</div>
-<h3>Pressure points</h3><div class="scroll">${table(match.config.myPlayerName, opponent, [["Pressure points won", pressureFor("my"), pressureFor("opponent")]])}</div>
+      + (options.matchStats ? `<section class="card"><h2>Match statistics</h2><div class="scroll">${table(match.config.myPlayerName, opponent, matchRows(scopeStats))}</div>
+<h3>Pressure points</h3><div class="scroll">${table(match.config.myPlayerName, opponent, pressureRows(scopePressure))}</div>
 <p class="muted small">Pressure context is derived from the score immediately before each tracked point. A point can belong to more than one pressure category; the total counts it once.</p></section>` : "")
       + (options.shotAnalytics ? `<section class="card"><h2>Shot analytics</h2><div class="scroll">${table(match.config.myPlayerName, opponent, shotRows(scopeStats))}</div>
+<h3>Points won by rally length</h3><div class="scroll">${table(match.config.myPlayerName, opponent, rallyRows(scopeStats))}</div>
+<h3>Where errors landed</h3><div class="scroll">${table(match.config.myPlayerName, opponent, landingRows(scopeStats))}</div>
 <p class="muted small">Impact is the point endings that won the point minus the ones that lost it, shown as +/− with wins, errors, and sample size. A winner, return winner, or forced error is credited to the point winner; an unforced error or return error to the point loser. Based only on observed point-ending shots—not every stroke in the rally.</p></section>` : "")
       + `</div>`;
   };

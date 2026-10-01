@@ -7,6 +7,7 @@ import { buildPressureAnalytics } from "../lib/tennis/pressure.ts";
 import { createPlayerProfile, linkPlayerIdentity, playerProfileAnalytics, versionPlayerProfile } from "../lib/tennis/profiles.ts";
 import { buildExportBundle, staleStrategyEventIds, zipFiles } from "../lib/tennis/export.ts";
 import { buildCoachReport } from "../lib/tennis/report.ts";
+import { matchRows, pressureRows } from "../lib/tennis/stattables.ts";
 
 const winPoint = (score, player, format = "best_of_3_tiebreak", ad = true) => applyPoint(score, player, format, ad);
 function winGame(score, player, format = "best_of_3_tiebreak", ad = true) {
@@ -492,4 +493,43 @@ test("scopes offered by the report match the ones the Stats screen offers", () =
   // The tracker also offers the set in progress; the report only what was played.
   assert.deepEqual(statsScopeOptions(match.events, match.config, false).map((o) => o.id), ["total", "set_1"]);
   assert.deepEqual(statsScopeOptions(match.events, match.config).map((o) => o.id), ["total", "set_1", "set_2"]);
+});
+
+test("one definition of the statistics rows drives both the screen and the report", () => {
+  const match = matchFrom(Array.from({ length: 24 }, (_, index) => (index % 4 === 3 ? "opponent" : "my")));
+  const stats = buildStats(match.events, match.config);
+  const labels = matchRows(stats).map((entry) => entry.label);
+
+  // Metrics that used to exist on only one of the two surfaces.
+  for (const screenOnly of ["Service games held", "Breaks won", "First-serve return points won", "Second-serve return points won"]) {
+    assert.ok(labels.includes(screenOnly), `${screenOnly} missing from the shared rows`);
+  }
+  for (const reportOnly of ["Break points saved", "Points won", "Longest point streak"]) {
+    assert.ok(labels.includes(reportOnly), `${reportOnly} missing from the shared rows`);
+  }
+
+  // And the report renders them, so the two can no longer disagree.
+  const html = buildCoachReport(match);
+  for (const label of ["Service games held", "Breaks won", "Break points saved", "Where errors landed", "Points won by rally length"]) {
+    assert.ok(html.includes(label), `${label} missing from the report`);
+  }
+});
+
+test("every rate carries its numerator, denominator and percentage", () => {
+  const match = matchFrom(Array.from({ length: 24 }, () => "my"));
+  const rows = matchRows(buildStats(match.events, match.config));
+  const served = rows.find((entry) => entry.label === "Service points won");
+  assert.match(served.my.value, /^\d+\/\d+$/, "a rate shows n/d, never a bare percentage");
+  assert.match(served.my.detail, /^\d+%$/);
+  // A metric with no observations says so rather than printing a misleading zero.
+  const empty = matchRows(buildStats(matchFrom([]).events, match.config)).find((entry) => entry.label === "Service points won");
+  assert.equal(empty.my.value, "—");
+  assert.equal(empty.my.detail, "n=0");
+});
+
+test("pressure rows omit categories nobody reached", () => {
+  const match = matchFrom(Array.from({ length: 24 }, () => "my"));
+  const labels = pressureRows(buildPressureAnalytics(match)).map((entry) => entry.label);
+  assert.ok(labels.includes("All pressure points"));
+  assert.ok(!labels.includes("Late in a tiebreak"), "no tiebreak was played");
 });
