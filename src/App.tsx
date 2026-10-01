@@ -117,7 +117,7 @@ export default function Home() {
   if (!loaded) return <main className="loading"><span className="brand-mark">B</span><p>Opening Baseline…</p></main>;
   function saveNewVersion(profile: PlayerProfile, displayName: string, key: "my" | "opponent") { const { player, mapping } = versionPlayerProfile(profile, displayName); setPlayers((rows) => [...rows, player]); setMappings((rows) => [...rows, mapping]); savePlayer(player); saveIdentityMapping(mapping); setConfig((current) => ({ ...current, [`${key}PlayerId`]: player.id, [`${key}PlayerName`]: player.displayName })); }
   if (screen === "setup") return <Setup config={config} setConfig={setConfig} players={players} onVersion={saveNewVersion} onCancel={() => setScreen("home")} onStart={startMatch} />;
-  if (screen === "match" && match) return <MatchTracker match={match} setMatch={setMatch} players={players} mappings={mappings} saved={saved} onExit={() => setScreen("home")} />;
+  if (screen === "match" && match) return <MatchTracker match={match} setMatch={setMatch} saved={saved} onExit={() => setScreen("home")} />;
   if (homeView !== "matches") return <DataHub view={homeView} setView={setHomeView} players={players} matches={matches} mappings={mappings} onMap={(mapping) => { setMappings((rows) => [...rows, mapping]); saveIdentityMapping(mapping); }} />;
   return <main className="app-shell home-screen">
     <header className="brand-header"><span className="brand-mark">B</span><div><strong>Baseline</strong><small>Tennis match tracker</small></div></header>
@@ -156,7 +156,7 @@ function DataHub({ view, setView, players, matches, mappings, onMap }: { view: "
     {view==="reports"&&<><section className="data-intro"><h1>Coach report</h1><p>Publish a private, read-only page a coach can open on any device. It is excluded from search indexing, expires, and can be revoked.</p></section>
       {!selectedMatch
         ? <div className="empty-card"><strong>No matches on this device</strong><p>Track a match, or open Baseline on the device you tracked it on. Matches are stored on the device that recorded them.</p></div>
-        : <><label className="data-select">Match<select value={matchId} onChange={(e)=>setMatchId(e.target.value)}>{matches.map((m)=><option value={m.id} key={m.id}>{m.config.myPlayerName} vs. {m.config.opponentName}</option>)}</select></label><section className="data-card report-options"><h2>Include in the report</h2>{Object.entries({opponentIdentity:"Opponent identity",matchStats:"Match stats",shotAnalytics:"Shot analytics",timeline:"Timelines",mentalStates:"Mental-state progression",mentalNotes:"Mental-state notes",recommendations:"Coaching recommendations"}).map(([key,label])=><label key={key}><input type="checkbox" checked={options[key as keyof CoachReportOptions]} onChange={(e)=>setOptions((current)=>({...current,[key]:e.target.checked}))}/>{label}</label>)}</section><ReportLinkCard match={selectedMatch} options={options} /><ShareLinkCard match={selectedMatch} /></>}</>}
+        : <><label className="data-select">Match<select value={matchId} onChange={(e)=>setMatchId(e.target.value)}>{matches.map((m)=><option value={m.id} key={m.id}>{m.config.myPlayerName} vs. {m.config.opponentName}</option>)}</select></label><section className="data-card report-options"><h2>Include in the report</h2>{Object.entries({opponentIdentity:"Opponent identity",matchStats:"Match stats",shotAnalytics:"Shot analytics",timeline:"Timelines",mentalStates:"Mental-state progression",mentalNotes:"Mental-state notes",recommendations:"Coaching recommendations"}).map(([key,label])=><label key={key}><input type="checkbox" checked={options[key as keyof CoachReportOptions]} onChange={(e)=>setOptions((current)=>({...current,[key]:e.target.checked}))}/>{label}</label>)}</section><ReportLinkCard match={selectedMatch} options={options} /></>}</>}
   </div><HomeNav view={view} setView={setView}/></main>;
 }
 
@@ -277,51 +277,10 @@ function ReportLinkCard({ match, options }: { match: MatchRecord; options: Coach
   </section>;
 }
 
-/**
- * Live links (requirements sections 18 and 19). Every privacy choice here is
- * enforced in the Worker, not in the page the recipient loads, so a link cannot
- * be made to reveal more than it was created with.
- */
-function ShareLinkCard({ match }: { match: MatchRecord }) {
-  const [links, setLinks] = useState<ShareLink[]>([]);
-  const [created, setCreated] = useState<ShareLinkResponse>();
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [opponentDisplay, setOpponentDisplay] = useState<"full" | "initials" | "hidden">("initials");
-  const [includeMentalStates, setIncludeMentalStates] = useState(false);
-  const [includeTimeline, setIncludeTimeline] = useState(true);
-  const [expiresInHours, setExpiresInHours] = useState(24);
-  const [enabled, setEnabled] = useState(false);
-  useEffect(() => { sessionStatus().then((state) => setEnabled(state.authenticated)).catch(() => undefined); }, []);
-  const refresh = () => { listShareLinks(match.id).then((rows) => setLinks(rows.filter((link) => link.kind !== "report"))).catch(() => setLinks([])); };
-  useEffect(() => { if (enabled) refresh(); }, [match.id, enabled]); // eslint-disable-line react-hooks/exhaustive-deps
-  async function create() {
-    setBusy(true); setError(""); setCreated(undefined);
-    try {
-      const made = await createShareLink(match.id, { kind: "live", opponentDisplay, includeMentalStates, includeTimeline, expiresInHours });
-      // Remembered under the same key the tracker reads, so a link created here
-      // is copyable from the Match tab for the rest of the match.
-      rememberShareLink(match.id, made); setCreated(made); refresh();
-    }
-    catch (failure) { setError(failure instanceof Error ? failure.message : "Could not create the link."); }
-    setBusy(false);
-  }
-  if (!enabled) return <section className="data-card"><h2>Live spectator link</h2><p>Sign in under Export to create a read-only link someone else can follow while the match is being tracked.</p></section>;
-  return <section className="data-card"><h2>Live spectator link</h2><p>A read-only link to this match only. It expires, can be revoked at any time, and is excluded from search indexing. Mental-state observations are withheld unless you include them, and free-form notes never travel.</p>
-    <label className="data-select">Opponent shown as<select value={opponentDisplay} onChange={(event) => setOpponentDisplay(event.target.value as "full" | "initials" | "hidden")}><option value="initials">Initials only</option><option value="hidden">Hidden</option><option value="full">Full name</option></select></label>
-    <label className="data-select">Link expires after<select value={expiresInHours} onChange={(event) => setExpiresInHours(Number(event.target.value))}><option value={4}>4 hours</option><option value={24}>24 hours</option><option value={72}>3 days</option><option value={168}>7 days</option></select></label>
-    <label className="check-row"><input type="checkbox" checked={includeTimeline} onChange={(event) => setIncludeTimeline(event.target.checked)} />Include the point timeline</label>
-    <label className="check-row"><input type="checkbox" checked={includeMentalStates} onChange={(event) => setIncludeMentalStates(event.target.checked)} />Include mental-state observations</label>
-    <button disabled={busy} onClick={create}>{busy ? "Creating…" : "Create live link"}</button>
-    {error && <p className="validation-error">{error}</p>}
-    {created && <p className="share-url">{created.url}<small>Copy it now&mdash;the link is shown once.</small></p>}
-    <ShareLinkList links={links} onRevoke={(id) => revokeShareLink(id).then(refresh).catch(() => undefined)} />
-  </section>;
-}
 
 function MentalSelect({ label, value, onChange }: { label: string; value: MentalState; onChange: (value: MentalState) => void }) { return <label>{label}<select value={value} onChange={(event) => onChange(event.target.value as MentalState)}>{Object.entries(mentalLabels).map(([key, text]) => <option key={key} value={key}>{text}</option>)}</select></label>; }
 
-function MatchTracker({ match, setMatch, players, mappings, saved, onExit }: { match: MatchRecord; setMatch: (match: MatchRecord) => void; players: PlayerProfile[]; mappings: IdentityMapping[]; saved: boolean; onExit: () => void }) {
+function MatchTracker({ match, setMatch, saved, onExit }: { match: MatchRecord; setMatch: (match: MatchRecord) => void; saved: boolean; onExit: () => void }) {
   const [tab, setTab] = useState<Tab>("track"); const [stage, setStage] = useState<TrackStage>("serve");
   const [serveAttempt, setServeAttempt] = useState<1 | 2>(1); const [pendingPointId, setPendingPointId] = useState<string>();
   const [details, setDetails] = useState<PointDetails>({}); const [scoreModal, setScoreModal] = useState(false);
@@ -344,19 +303,14 @@ function MatchTracker({ match, setMatch, players, mappings, saved, onExit }: { m
   function append(events: MatchEvent[]) { setMatch({ ...match, updatedAt: new Date().toISOString(), events: [...match.events, ...events] }); }
   function makeServeEvent(pointGroupId: string, result: "in" | "fault" | "ace", attempt: 1 | 2, offset = 1): MatchEvent { return { ...eventBase(match, offset), source: "tracked", type: "serve_attempted", pointGroupId, payload: { server: score.server, attempt, result } }; }
   /**
-   * A match can be staged before the toss (roadmap item, section 4). Until the
-   * first point is saved there is nothing to re-score, so this changes the config
-   * and appends a correction against `match_created` rather than rewriting that
-   * event's snapshot — the log stays immutable and the change stays auditable.
+   * A match can be staged before the toss (section 4). Setting the first server is
+   * still setup, not match history: it is only possible before any point exists,
+   * so there is nothing to re-score and nothing a timeline reader needs to know.
+   * It writes no event — the first timeline entry stays the first point.
    */
   function chooseFirstServer(player: PlayerKey) {
     if (points.length || player === match.config.firstServer) return;
-    const created = match.events.find((event) => event.type === "match_created");
-    const correction: MatchEvent[] = created ? [{
-      ...eventBase(match), source: "corrected", type: "event_corrected", correctsEventId: created.id,
-      payload: { reason: "First server set at the toss", changes: { firstServer: player } },
-    }] : [];
-    setMatch({ ...match, updatedAt: new Date().toISOString(), config: { ...match.config, firstServer: player }, events: [...match.events, ...correction] });
+    setMatch({ ...match, updatedAt: new Date().toISOString(), config: { ...match.config, firstServer: player } });
   }
   function setLanding(key: "firstServeLanding" | "secondServeLanding", landing?: BallLanding) {
     setDetails((current) => {
@@ -440,7 +394,7 @@ function MatchTracker({ match, setMatch, players, mappings, saved, onExit }: { m
     <Scoreboard match={match} score={score} onSync={() => setScoreModal(true)} /><section className="tracker-content">{stage === "serve" && <ServeStage score={score} config={match.config} serveAttempt={serveAttempt} onServe={onServe} onFirstServer={points.length ? undefined : chooseFirstServer} firstServeLanding={details.firstServeLanding} onFirstServeLanding={(landing) => setLanding("firstServeLanding", landing)} />}{stage === "winner" && <WinnerStage config={match.config} onWinner={chooseWinner} />}{stage === "outcome" && <OutcomeStage allowedOutcomes={pendingPoint ? eligiblePointOutcomes(pendingPoint) : []} onOutcome={chooseOutcome} onSkip={finishDetails} />}{stage === "details" && <DetailsTray details={details} setDetails={setDetails} onContinue={finishDetails} />}{stage === "serve_landing" && <ServeLandingStage onSelect={(landing) => setLanding("secondServeLanding", landing)} onDone={finishDetails} selected={details.secondServeLanding} />}</section>
     {boundaryPrompt && <div className="boundary-prompt"><span>{boundaryPrompt === "set_end" ? "End of set" : "End of game"} — note how {match.config.myPlayerName} looks?</span><button onClick={() => { setMentalMoment(boundaryPrompt); setMentalModal("my"); setBoundaryPrompt(undefined); }}>Observe</button><button className="boundary-dismiss" aria-label="Dismiss reminder" onClick={() => setBoundaryPrompt(undefined)}>×</button></div>}
     <button className="mental-pill" onClick={() => { setMentalMoment(pendingPointId ? "after_point" : "manual"); setMentalModal("my"); }}><span className={`mental-dot ${mental.my}`} /> {match.config.myPlayerName} is {mentalLabels[mental.my].toLowerCase()} <b>Change</b></button><div className="connection-strip"><span>● {online ? "Online" : "Offline tracking"}</span><span>{stats.coverage}% tracked</span></div><BottomNav tab={tab} onTab={setTab} />
-    {tab !== "track" && <div className="overlay-page"><button className="overlay-close" onClick={() => setTab("track")}>×</button>{tab === "stats" && <StatsView match={match} stats={stats} />}{tab === "timeline" && <TimelineView match={match} points={points} details={detailMap} />}{tab === "match" && <MatchView match={match} stats={stats} score={score} onExport={() => downloadExport(match, players, mappings)} onGenerate={generateStrategy} />}</div>}
+    {tab !== "track" && <div className="overlay-page"><button className="overlay-close" onClick={() => setTab("track")}>×</button>{tab === "stats" && <StatsView match={match} stats={stats} />}{tab === "timeline" && <TimelineView match={match} points={points} details={detailMap} />}{tab === "match" && <MatchView match={match} stats={stats} score={score} onGenerate={generateStrategy} />}</div>}
     {scoreModal && <ScoreSyncModal match={match} score={score} onClose={() => setScoreModal(false)} onSave={(corrected, reason) => { const completions: MatchEvent[] = derivedCompletions(score, corrected, { includeGames: false }).map((completion, index) => ({ ...eventBase(match, index + 2), source: "corrected", ...completion })); append([{ ...eventBase(match), source: "corrected", type: "score_synced", payload: { previous: score, corrected, reason, valid: true } }, ...completions]); setScoreModal(false); resetPointEntry(); }} />}
     {mentalModal && <MentalModal key={mentalModal} player={mentalModal} current={mental[mentalModal]} config={match.config} onClose={() => setMentalModal(undefined)} onSave={(state, note) => { append([{ ...eventBase(match), source: "tracked", type: "mental_state_changed", payload: { player: mentalModal, state, previousState: mental[mentalModal], captureMoment: mentalMoment, linkedPointGroupId: pendingPointId ?? points[points.length - 1]?.pointGroupId, score, note } }]); setMentalModal(undefined); }} onSwitch={setMentalModal} />}
   </main>;
@@ -464,9 +418,7 @@ function ServeLandingRow({ label, selected, onSelect }: { label: string; selecte
 
 /** Shown after a double fault, which is already scored by the time this appears. */
 function ServeLandingStage({ selected, onSelect, onDone }: { selected?: BallLanding; onSelect: (landing?: BallLanding) => void; onDone: () => void }) {
-  // Names the serve it is asking about: the first serve may already have been
-  // answered on the previous screen, so "where did it land" alone is ambiguous.
-  return <><div className="point-prompt compact"><p className="eyebrow">DOUBLE FAULT · POINT SAVED</p><h1>Where did the second serve land?</h1><p>Optional—choose one, or keep moving.</p></div>
+  return <><div className="point-prompt compact"><p className="eyebrow">DOUBLE FAULT</p><h1>Where did it land?</h1><p>Optional—choose one, or keep moving.</p></div>
     <div className="landing-grid">{BALL_LANDINGS.map((landing) => <button className={selected === landing ? "selected" : ""} key={landing} onClick={() => onSelect(selected === landing ? undefined : landing)}>{landingLabels[landing]}</button>)}</div>
     <button className="skip-button" onClick={onDone}>{selected ? "Save and continue" : "Skip details"} <span>→</span></button></>;
 }
@@ -723,10 +675,10 @@ function LiveLinkCard({ match }: { match: MatchRecord }) {
   </section>;
 }
 
-function MatchView({ match, stats, score, onExport, onGenerate }: { match: MatchRecord; stats: ReturnType<typeof buildStats>; score: ScoreState; onExport: () => void; onGenerate: () => Promise<{ response: string; evidence: string[]; provider: string; model: string }> }) {
+function MatchView({ match, stats, score, onGenerate }: { match: MatchRecord; stats: ReturnType<typeof buildStats>; score: ScoreState; onGenerate: () => Promise<{ response: string; evidence: string[]; provider: string; model: string }> }) {
   const [review, setReview] = useState<{ response: string; evidence: string[]; provider: string; model: string }>(); const [loading, setLoading] = useState(false);
   async function askForReview() { setLoading(true); const next = await onGenerate(); setReview(next); setLoading(false); }
-  return <section className="full-view"><p className="eyebrow">MATCH CENTER</p><h1>Review & strategy</h1><div className="match-summary"><span><small>FORMAT</small><strong>{FORMAT_RULES[match.config.format].shortLabel}</strong></span><span><small>SCORE</small><strong>{scoreSummary(score, match.config)}</strong></span><span><small>DATA</small><strong>{stats.coverage}% tracked</strong></span></div><LiveLinkCard match={match} /><div className="strategy-card"><span className="strategy-icon">✦</span><p className="eyebrow">ON-DEMAND REVIEW</p><h2>What should {match.config.myPlayerName} do next?</h2><p>Uses the cumulative score, service, return, shot, rally, and mental-state observations for both players. Match data is sent for analysis only when you tap below.</p><button disabled={loading} onClick={askForReview}>{loading ? "Reviewing the match…" : "Ask AI for strategy"}</button>{review && <div className="strategy-response"><p className="pre-line">{review.response}</p><h3>Evidence used</h3>{review.evidence.length ? <ul>{review.evidence.map((item) => <li key={item}>{item}</li>)}</ul> : <p>More tracked points will produce stronger evidence.</p>}<small>{review.provider === "on-device" ? "On-device evidence review · The hosted model is unavailable or not configured." : `${review.provider} · ${review.model}`} · Dataset cutoff saved in the event log.</small></div>}</div><div className="data-card"><div><h2>Your match data</h2><p>Download a lossless event log plus analysis-ready CSV tables for Codex, Claude, or another tool.</p></div><button onClick={onExport}>Export data ↓</button></div>{match.config.tournamentUrl && <a className="tournament-link" href={match.config.tournamentUrl} target="_blank" rel="noreferrer"><span><small>USTA TOURNAMENT</small><strong>{match.config.tournamentName || "Open tournament page"}</strong></span><b>↗</b></a>}</section>;
+  return <section className="full-view"><p className="eyebrow">MATCH CENTER</p><h1>Review & strategy</h1><div className="match-summary"><span><small>FORMAT</small><strong>{FORMAT_RULES[match.config.format].shortLabel}</strong></span><span><small>SCORE</small><strong>{scoreSummary(score, match.config)}</strong></span><span><small>DATA</small><strong>{stats.coverage}% tracked</strong></span></div><LiveLinkCard match={match} /><div className="strategy-card"><span className="strategy-icon">✦</span><p className="eyebrow">ON-DEMAND REVIEW</p><h2>What should {match.config.myPlayerName} do next?</h2><p>Uses the cumulative score, service, return, shot, rally, and mental-state observations for both players. Match data is sent for analysis only when you tap below.</p><button disabled={loading} onClick={askForReview}>{loading ? "Reviewing the match…" : "Ask AI for strategy"}</button>{review && <div className="strategy-response"><p className="pre-line">{review.response}</p><h3>Evidence used</h3>{review.evidence.length ? <ul>{review.evidence.map((item) => <li key={item}>{item}</li>)}</ul> : <p>More tracked points will produce stronger evidence.</p>}<small>{review.provider === "on-device" ? "On-device evidence review · The hosted model is unavailable or not configured." : `${review.provider} · ${review.model}`} · Dataset cutoff saved in the event log.</small></div>}</div>{match.config.tournamentUrl && <a className="tournament-link" href={match.config.tournamentUrl} target="_blank" rel="noreferrer"><span><small>USTA TOURNAMENT</small><strong>{match.config.tournamentName || "Open tournament page"}</strong></span><b>↗</b></a>}</section>;
 }
 function CompletedView({ match, score, stats, saved, onTab, onExit }: { match: MatchRecord; score: ScoreState; stats: ReturnType<typeof buildStats>; saved: boolean; onTab: (tab: Tab) => void; onExit: () => void }) { return <main className="app-shell completed-screen"><header className="match-bar"><button className="icon-button" onClick={onExit}>×</button><div><span>MATCH COMPLETE</span><strong>{match.config.myPlayerName} vs. {match.config.opponentName}</strong><small className="save-state saved">● {saved ? "Saved on device" : "Saving…"}</small></div><span /></header><section className="completed-hero"><span className="trophy">✓</span><p className="eyebrow">FINAL</p><h1>{playerName(match.config, score.winner ?? "my")} wins</h1><strong>{scoreSummary(score, match.config)}</strong><p>{stats.directlyTrackedPoints} points captured · {stats.coverage}% coverage</p></section><div className="completed-actions"><button onClick={() => onTab("stats")}>View match stats</button><button onClick={() => onTab("match")}>Review strategy</button><button onClick={() => downloadExport(match)}>Export match data</button></div><button className="text-button" onClick={onExit}>Return to matches</button></main>; }
 

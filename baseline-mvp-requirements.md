@@ -131,10 +131,9 @@ Required setup fields:
 - Ad scoring switch
 
 First server can be set during setup or left until the toss. The serve screen offers the choice until
-the first point is saved, so a match can be staged in advance. Until a point exists there is nothing
-to re-score, so the change amends the match configuration and appends an `event_corrected` against
-`match_created` rather than rewriting that event's snapshot: the log stays immutable and the change
-stays auditable.
+the first point is saved, so a match can be staged in advance. Setting it is still setup rather than
+match history — it is only possible before any point exists, so there is nothing to re-score — and it
+writes no event. The first entry in a match timeline is its first point.
 
 Optional setup fields:
 
@@ -959,10 +958,14 @@ Reinstate it together with two-way sync, never separately.
 - Replayed events are deduplicated by id.
 - Sharing a match never transfers scoring control.
 
-A link can be created from the Match tab while tracking, without leaving the match. That path uses
-fixed conservative defaults — opponent by initials, a day's expiry, timeline included, mental states
-withheld — because choosing between points is the wrong moment for a privacy form. The Reports
-screen keeps the full set of choices.
+A link is created from the Match tab while tracking, without leaving the match, using fixed
+conservative defaults: opponent by initials, a day's expiry, timeline included, mental-state
+observations withheld.
+
+**Pending — per-link privacy choices.** Those four settings are enforced per connection in the
+Worker and can vary per link, but nothing in the interface varies them: the Reports screen's form was
+removed once the Match tab carried the link, and the defaults are now the only combination a live
+link can have.
 
 The link is offered with a copy control, and a native share where the platform provides one. Because
 the API returns a token only at creation, the device that created a link remembers its URL, so the
