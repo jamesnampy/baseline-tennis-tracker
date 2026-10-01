@@ -50,5 +50,47 @@
       "database_id": "c47373db-7afd-4192-bdea-89d82255f1f0",
       "migrations_dir": "./drizzle"
     }
-  ]
+  ],
+
+  // A second household, run as a named environment rather than a second repo so
+  // one codebase serves both and neither drifts.
+  //
+  // Isolation comes from the bindings below, not from application code: its own
+  // D1 database and its own Durable Object namespace mean there is no shared
+  // state to leak through. A share token is looked up in the database of the
+  // instance that serves it, so a link minted on one origin cannot resolve on
+  // the other.
+  //
+  // Bindings are deliberately not inherited by named environments in Wrangler,
+  // so each one is repeated here. That repetition is the safety property: a
+  // second environment can never silently fall back to production's database.
+  //
+  // Secrets are per environment too. Set them with `--env ritwik`.
+  "env": {
+    "ritwik": {
+      "name": "baseline-tennis-tracker-ritwik",
+      "observability": { "enabled": true },
+      "routes": [
+        { "pattern": "ritwik.baseline.jamesvibecode.com", "custom_domain": true }
+      ],
+      "workers_dev": false,
+      "assets": {
+        "directory": "./dist/client",
+        "binding": "ASSETS",
+        "not_found_handling": "single-page-application",
+        "run_worker_first": ["/api/*", "/report/*"]
+      },
+      "durable_objects": {
+        "bindings": [{ "name": "MATCH_ROOM", "class_name": "MatchRoom" }]
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "baseline-tennis-tracker-ritwik",
+          "database_id": "8e962dcd-edf2-4d54-b276-a6913e644c29",
+          "migrations_dir": "./drizzle"
+        }
+      ]
+    }
+  }
 }

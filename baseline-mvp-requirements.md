@@ -907,10 +907,14 @@ removes it from D1.
 does not need an identity provider or an email delivery dependency, and a password the account
 holder already controls is simpler to reason about than a mail round-trip at courtside.
 
-**Retired — family workspaces and member invitations** *(v2 §4)*. There is one account holder.
-Workspace ownership columns, invitations, and cross-workspace isolation would be structure with no
-second member to isolate. If a second adult ever needs access, this decision is the thing to revisit
-first, because it is the assumption every other authorization shortcut rests on.
+**Retired — family workspaces and member invitations** *(v2 §4)*. There is one account holder
+**per deployment**. A second household is served by a second deployment (section 29) rather than by
+workspaces inside one, so there is still no second member to isolate within an instance. Workspace
+ownership columns, invitations, and cross-workspace isolation remain unbuilt.
+
+This is the assumption every other authorization shortcut rests on, and it now has a stated limit:
+it holds while households are few enough to run an instance each. Section 29 names the point at
+which that stops being true.
 
 ## 25. Cloud synchronization
 
@@ -1026,3 +1030,47 @@ full in the section named.
 | Reviewable conflict queue | Immutable events keyed by event id from one writer cannot diverge. Reinstate with two-way sync, not before. | 25 |
 | Named-recipient share access | The access model is the unguessable, revocable, expiring token. | 26 |
 | Existing-device migration flow | There was no prior cloud to migrate from. The first push uploads the device's history, idempotently, which is the outcome the draft's import wizard was specifying. | 25 |
+
+## 29. Additional household deployments
+
+**Status: delivered for a second household.**
+
+A second family is served by a second deployment of the same codebase, run as a named Wrangler
+environment, rather than by multi-tenancy inside one instance. Section 24 retired workspaces and
+member roles; this is what replaces them while the number of households is small.
+
+Each environment declares its own worker name, hostname, D1 database, Durable Object namespace, and
+secrets. **Isolation is a property of those bindings, not of application code.** No query is scoped
+by a tenant id, because there is no shared store to scope: a share token is looked up in the database
+of the instance serving it, so a link minted on one origin cannot resolve on the other. An automated
+test asserts that no two environments share a worker name, database id, or hostname.
+
+Requirements:
+
+- One codebase, one repository. A second repository would drift.
+- Every environment is deployed from the same commit. `npm run deploy:all` publishes all of them, so
+  a change cannot land on one instance and not another.
+- The public origin is baked in at build time, so each environment is built separately with its own
+  origin. The Cloudflare Vite plugin flattens the configuration during the build and discards the
+  environment block, so the environment must be selected **at build time** through `CLOUDFLARE_ENV`.
+  Passing `--env` to the deploy alone would publish the previous build's bindings — production's,
+  in the common case.
+- Secrets are per environment and are never shared by copying a value into source control. A shared
+  model credential is set separately on each environment.
+- Schema migrations are applied per database.
+
+**Accepted deviation: the account owner can read every household's data.** Every instance runs in one
+Cloudflare account, so whoever holds that account can read any instance's D1 database directly. A
+household's password protects it from other users, not from the account owner. This is disclosed to
+each household rather than designed around.
+
+**Pending — per-household model billing.** Instances share one model credential, so usage is pooled
+and not attributable per household. Separate workspaces and credentials would separate it.
+
+**Pending — update consent.** Every instance is deployed from one commit by the account owner. A
+household cannot stay on an older build, and is not asked before an update lands mid-tournament.
+
+**The limit of this approach.** It holds while a household can be given an instance each. Once there
+are enough that deploying, migrating, and setting secrets per household stops being reasonable, the
+workspace model retired in section 24 becomes the right answer after all, and the per-deployment
+assumption in section 28 has to be revisited with it.

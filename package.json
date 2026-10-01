@@ -18,7 +18,9 @@
     "lint": "eslint .",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "wrangler d1 migrations apply baseline-tennis-tracker --remote",
-    "db:migrate:local": "wrangler d1 migrations apply baseline-tennis-tracker --local"
+    "db:migrate:local": "wrangler d1 migrations apply baseline-tennis-tracker --local",
+    "deploy:ritwik": "node scripts/deploy.mjs --env ritwik",
+    "deploy:all": "node scripts/deploy.mjs && node scripts/deploy.mjs --env ritwik"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.117.1",

@@ -68,3 +68,50 @@ test("combining CSVs keeps one header and every row", async () => {
   // Punctuation must not escape into a path.
   assert.equal(folderName({ config: { date: "2026-08-18", opponentName: "A/B .. C" } }), "2026-08-18-a-b-c");
 });
+
+/**
+ * A second household runs as a named environment. Isolation is a property of the
+ * bindings, not of application code, so these pin it: the day two environments
+ * share a database id or a hostname, one family starts reading another's match
+ * data, and nothing in the app would notice.
+ */
+test("every environment binds its own database, hostname and worker name", () => {
+  const config = parseJsonc(readFileSync("wrangler.jsonc", "utf8"));
+  const environments = [
+    { label: "production", scope: config },
+    ...Object.entries(config.env ?? {}).map(([label, scope]) => ({ label, scope })),
+  ];
+  assert.ok(environments.length > 1, "there should be more than production here");
+
+  const seen = { name: new Map(), database: new Map(), host: new Map() };
+  for (const { label, scope } of environments) {
+    const database = scope.d1_databases?.[0];
+    const host = scope.routes?.[0]?.pattern;
+    assert.ok(database?.database_id, `${label} declares no database id`);
+    assert.doesNotMatch(database.database_id, /REPLACE_WITH/, `${label} still has a placeholder database id`);
+    assert.ok(host, `${label} declares no custom domain`);
+    assert.equal(scope.workers_dev, false, `${label} must not also serve from workers.dev`);
+    // Each must bind D1 and the match room, or the environment silently loses
+    // sync and live links rather than failing loudly.
+    assert.equal(database.binding, "DB");
+    assert.equal(scope.durable_objects?.bindings?.[0]?.class_name, "MatchRoom");
+
+    for (const [key, value] of [["name", scope.name], ["database", database.database_id], ["host", host]]) {
+      const previous = seen[key].get(value);
+      assert.equal(previous, undefined, `${label} shares its ${key} with ${previous}`);
+      seen[key].set(value, label);
+    }
+  }
+});
+
+test("the deploy script reads each environment's own origin", () => {
+  const text = readFileSync("wrangler.jsonc", "utf8");
+  const config = parseJsonc(text);
+  assert.equal(configuredCustomDomain(text, ""), "https://baseline.jamesvibecode.com");
+  for (const [label, scope] of Object.entries(config.env ?? {})) {
+    assert.equal(configuredCustomDomain(text, label), `https://${scope.routes[0].pattern}`);
+  }
+  // An unknown environment yields nothing rather than falling back to production,
+  // which would bake the wrong absolute URLs into a build.
+  assert.equal(configuredCustomDomain(text, "no-such-environment"), "");
+});
