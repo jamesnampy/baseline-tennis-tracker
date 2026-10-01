@@ -11,7 +11,10 @@ import {
 export const DEFAULT_ANTHROPIC_MODEL = "claude-opus-5-5";
 
 export function createAnthropicProvider(apiKey: string, model: string): StrategyProvider {
-  const client = new Anthropic({ apiKey });
+  // A review runs about twenty seconds. Without an explicit timeout the SDK
+  // scales its own upward for large max_tokens and retries twice, so a stall
+  // becomes a very long hang rather than an error the app can fall back from.
+  const client = new Anthropic({ apiKey, timeout: 60_000, maxRetries: 1 });
 
   return {
     id: "anthropic",
@@ -21,7 +24,9 @@ export function createAnthropicProvider(apiKey: string, model: string): Strategy
       try {
         message = await client.messages.create({
           model,
-          max_tokens: 16000,
+          // Reviews run about 2,000 tokens. A ceiling far above that shapes
+          // nothing and only inflates the SDK's timeout.
+          max_tokens: 2500,
           system: SYSTEM_INSTRUCTIONS,
           // Adaptive thinking is the only on-mode for this model family; the
           // legacy budget_tokens field is rejected with a 400.

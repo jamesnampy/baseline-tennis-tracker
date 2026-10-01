@@ -52,3 +52,5 @@
 /* The sample behind each figure, under it. */
 .stat-row b i{display:block;font-style:normal;font-size:9px;font-weight:750;color:var(--muted);margin-top:2px;letter-spacing:0}
 .stat-row{min-height:44px;padding-top:4px;padding-bottom:4px}
+
+.strategy-waiting{font-size:10px;line-height:1.5;color:#bcd08a;margin:9px 0 0}

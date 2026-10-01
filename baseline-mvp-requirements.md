@@ -604,6 +604,19 @@ Every recommendation must:
 - Avoid psychological or medical diagnoses.
 - Include a reminder to follow applicable tournament coaching rules.
 
+**How the distinction is drawn.** Observation and inference were once separate labelled sections,
+which read as three restatements of the same statistics and buried the advice under them. They are
+now distinguished **within each line**: the recommendation is the inference, and the figure beside it
+is the observation it rests on — "Attack his second serve — he has won 3 of 9 there." A line with no
+figure is not written at all.
+
+This keeps a claim checkable, which is the point of the requirement, without a review being three
+times as long as the advice it carries. It is read between points, on a phone.
+
+The review is also structured for use rather than for completeness: what my player should press, what
+the opponent is giving away, and what my player must protect. Both players' statistics inform all
+three.
+
 Every generated review stores:
 
 - Review ID and match ID
