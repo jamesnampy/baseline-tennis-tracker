@@ -8,7 +8,7 @@ import {
 } from "./types.ts";
 
 /** Change this to move the whole app to another Claude model, or set STRATEGY_MODEL in the environment. */
-export const DEFAULT_ANTHROPIC_MODEL = "claude-opus-4-8";
+export const DEFAULT_ANTHROPIC_MODEL = "claude-opus-5-5";
 
 export function createAnthropicProvider(apiKey: string, model: string): StrategyProvider {
   const client = new Anthropic({ apiKey });
