@@ -12,7 +12,7 @@ export function pressureCategories(point: PointCompletedEvent, match: MatchRecor
   const result = new Set<PressureCategory>();
   if (before.inTiebreak) {
     result.add("tiebreak");
-    const lateAt = before.tiebreakTarget === 10 ? 8 : 5;
+    const lateAt = before.tiebreakTarget - 2;
     if (before.points[0] >= lateAt && before.points[1] >= lateAt) result.add("late_tiebreak");
   } else {
     if (before.points[0] >= 2 && before.points[1] >= 2) result.add("late_game");

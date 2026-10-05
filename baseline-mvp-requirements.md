@@ -194,7 +194,13 @@ Profile views aggregate authorized matches by player, opponent, tournament, date
 
 - First two sets are short sets to 4.
 - A 7-point tiebreak is played at 3–3.
-- A deciding third set is replaced by a 10-point match tiebreak, win by 2.
+- A deciding third set is replaced by a **7-point** match tiebreak, win by 2.
+
+The length of a deciding tiebreak is declared by the format rather than inferred
+from the number. Nothing may treat "the target is 10" as meaning "this is the
+match tiebreak": a short-set match decides on seven, and six places once read the
+target to identify the decider — scoring, the set record, both statistics scopes,
+the tracking header, and manual score correction.
 
 ### Pro 8
 
@@ -315,7 +321,9 @@ Ranges:
 - 11–20
 - 21+
 
-For Return Winner or Return Error, 1–5 is selected automatically. For all other outcomes, rally length starts unselected.
+For Return Winner or Return Error, 1–5 is selected automatically and the section is not shown: a
+return ends two shots in, so no other value is reachable, and across 98 return outcomes none was
+ever recorded as anything else. For all other outcomes, rally length starts unselected.
 
 ### Final stroke
 
@@ -323,7 +331,11 @@ No default:
 
 - Forehand
 - Backhand
-- Neither
+
+**Retired — "Neither".** It was offered on 584 annotated points and selected on none of them, and no
+surface displayed the result. An overhead is the case it existed for, and Shot Type already carries
+that. A value merging "no wing applies" with "I did not see" would also record an observation the
+tracker never made; not choosing is how an unknown stroke is said.
 
 Final Stroke is presented on one line in the mobile experience.
 
@@ -345,19 +357,46 @@ Row 2:
 
 ### Shot type — Advanced
 
-Advanced shot type is optional and has no default.
+Advanced shot type is optional and has no default. Offered for Return Winner, Winner, Forced Error,
+and Unforced Error.
 
-Row 1:
+Row 1 — how the shot was set up:
 
+- Approach Shot
 - Passing Shot
+
+Row 2 — where it was hit:
+
 - Cross-Court
-
-Row 2:
-
 - Inside-Out
-- Inside-In
+- Down the Line
 
-Advanced options appear two per line.
+Cross-court and down-the-line are directions, qualified by Final Stroke, so a shot is a forehand
+cross-court or a backhand cross-court. Inside-out is a run-around forehand, counted separately rather
+than folded into cross-court, because the run-around is the part worth seeing.
+
+**Not offered for Return Error.** A missed return is neither an approach nor a passing shot, and
+where it landed says more than where it was aimed. Both rows were filled on 6 of 87 return errors and
+fed no statistic at all, since winner patterns count winning outcomes only.
+
+**Retired — "Inside-In".** It was offered where down-the-line belonged, and was used as a direction:
+40 points carried it against 42 inside-out, where a run-around down-the-line should be a fraction of
+a run-around cross-court. Those points are read as down-the-line. The value stays readable and no
+event is rewritten.
+
+### Court position
+
+Where **your player** stood when the point ended — Net, Service line, or Baseline. Offered for
+Winner, Forced Error, and Unforced Error only: an ace or double fault ends on the serve, and a return
+outcome ends with both players at the baseline, so neither says anything about position.
+
+Unlike the shot details, this describes a fixed player rather than whoever hit last. Being at the
+baseline when passed is as informative as being at the net when finishing, and attribution by shot
+would discard the first. The opponent's position is not recorded.
+
+It is reported as its own one-sided card on the Stats screen and in the coach report, with its sample
+size, and is kept apart from Net conversion: that counts points ended by a volley or overhead, which
+is inferred from the shot rather than observed, and merging the two would hide which is which.
 
 ### Ball landed
 
@@ -375,6 +414,11 @@ first fault's landing sits beside the second-serve buttons, so recording it cost
 ignoring it costs nothing. The second fault's is offered after the point, which a double fault has
 already decided, so point entry never waits for it. Each is stored per attempt as
 `firstServeLanding` and `secondServeLanding`.
+
+Choosing a landing after a double fault saves and advances on that single tap: the point is already
+scored, so a confirming tap would be the only thing standing between two points. On a first fault the
+row collapses to a line showing the choice, which reopens on a tap, so it stops taking space without
+making a mis-tap unfixable.
 
 ### Detail completion behavior
 
@@ -676,6 +720,10 @@ Offline capture exists for connectivity resilience, not privacy: courts frequent
 - Match tracking works without network access.
 - The UI clearly shows local-save and analysis-connectivity state.
 - Background synchronization cannot change the local event order.
+- The home screen's introductory card is shown only while no match has been recorded. Once there is a
+  match to return to it collapses to its action alone: at full size it occupied roughly 359px and left
+  about one match visible on a phone, and the explanation it carried addresses someone deciding
+  whether to use the app rather than someone opening it courtside.
 
 ## 17. Data portability and analysis API
 
@@ -827,6 +875,12 @@ Delivered since version 1.2, and specified in the sections named:
 - ~~One definition of the statistics rows for both the Stats screen and the coach report~~ — neither
   can carry a metric the other lacks, every rate shows its numerator and denominator, and pressure
   now appears on the Stats screen for the first time. Sections 11, 12 and 18.
+- ~~Nine fixes raised from courtside use~~ — the short-set decider corrected to seven points and the
+  "a ten-point tiebreak is the decider" assumption removed from six places; fault landings saving on
+  one tap and collapsing once chosen; set durations; Down the Line replacing Inside-In; Return Error,
+  "Neither" and rally length on returns removed as options that cost taps and fed nothing; court
+  position at the end of a rally; and a home screen that shows matches rather than an introduction.
+  Sections 4, 5, 8, 11, 16 and 18.
 
 Outstanding work, in two tiers. The first comes from tracking real matches and is what the product
 owner is actually waiting on. The second is the standing backlog; items marked *(v2 §n)* were folded

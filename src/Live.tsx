@@ -14,8 +14,8 @@ import { buildStats, percentage } from "@/lib/tennis/analytics";
 import { mergeEvents } from "@/lib/tennis/live";
 import type { MatchConfig, MatchEvent, PlayerKey } from "@/lib/tennis/model";
 import {
-  activePointEvents, numberedPointEvents, pointGameNumber, pointScoreLabel, pointSetNumber,
-  projectScore, scoreSummary,
+  activePointEvents, formatDuration, numberedPointEvents, pointGameNumber, pointScoreLabel,
+  pointSetNumber, projectScore, scoreSummary, setDurations,
 } from "@/lib/tennis/scoring";
 
 interface LinkSettings {
@@ -125,6 +125,7 @@ export default function Live({ token }: { token: string }) {
   }
 
   const names: Record<PlayerKey, string> = { my: config.myPlayerName, opponent: config.opponentName };
+  const durations = setDurations(events);
   const columns = `minmax(105px, 1fr) repeat(${score.sets.length}, 31px) 40px 52px`;
   const statusLabel = connection === "live" ? "Live" : connection === "polling" ? "Updating" : connection === "connecting" ? "Connecting" : "Disconnected";
 
@@ -141,7 +142,7 @@ export default function Live({ token }: { token: string }) {
     <section className="full-view">
       <p className="eyebrow">BOTH PLAYERS</p>
       <h1>Match stats</h1>
-      <div className="coverage-card"><span><strong>{stats.coverage}%</strong><small>tracking coverage</small></span><span><strong>{activePointEvents(events).length}</strong><small>points captured</small></span><span><strong>{score.sets.length + (score.matchComplete ? 0 : 1)}</strong><small>sets</small></span></div>
+      {durations.length > 0 && <p className="set-durations">{durations.map((entry) => `Set ${entry.setNumber} · ${formatDuration(entry.seconds)}`).join("   ")}</p>}<div className="coverage-card"><span><strong>{stats.coverage}%</strong><small>tracking coverage</small></span><span><strong>{activePointEvents(events).length}</strong><small>points captured</small></span><span><strong>{score.sets.length + (score.matchComplete ? 0 : 1)}</strong><small>sets</small></span></div>
       <div className="stats-table">
         <div className="stats-head"><strong>{names.my}</strong><span>STAT</span><strong>{names.opponent}</strong></div>
         {([

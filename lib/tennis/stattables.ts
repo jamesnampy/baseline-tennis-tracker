@@ -15,7 +15,7 @@
  * percentage alongside — never a bare percentage.
  */
 import { percentage, shotImpact, type MatchStats, type PlayerStats, type ShotBreakdown } from "./analytics.ts";
-import type { BallLanding, PlayerKey, ShotType } from "./model.ts";
+import type { BallLanding, CourtPosition, PlayerKey, ShotType } from "./model.ts";
 import type { PlayerPressure, PressureCategory } from "./pressure.ts";
 
 export interface StatCell {
@@ -49,12 +49,12 @@ const row = (label: string, cell: (side: PlayerStats, other: PlayerStats) => Sta
 export const SHOT_TYPES: ShotType[] = ["groundstroke", "slice", "volley", "drop_shot", "lob", "overhead"];
 export const BALL_LANDINGS: BallLanding[] = ["net", "long", "side"];
 export const RALLY_RANGES = ["1-5", "6-10", "11-20", "21+"] as const;
-export const WINNER_PATTERNS = ["approach_shot", "passing_shot", "cross_court", "inside_out", "inside_in"] as const;
+export const WINNER_PATTERNS = ["approach_shot", "passing_shot", "cross_court", "inside_out", "down_the_line"] as const;
 
 export const SHOT_LABELS: Record<string, string> = {
   groundstroke: "Groundstroke", slice: "Slice", volley: "Volley", drop_shot: "Drop shot",
   lob: "Lob", overhead: "Overhead", approach_shot: "Approach shot", passing_shot: "Passing shot",
-  cross_court: "Cross-court", inside_out: "Inside-out", inside_in: "Inside-in",
+  cross_court: "Cross-court", inside_out: "Inside-out", down_the_line: "Down the line",
   net: "Net", long: "Long", side: "Side",
 };
 
@@ -139,4 +139,33 @@ export function pressureRows(pressure: Record<PlayerKey, PlayerPressure>): StatR
     rows.push({ label: PRESSURE_LABELS[category], my: rate(mine.won, mine.played), opponent: rate(theirs.won, theirs.played) });
   }
   return rows;
+}
+
+export const COURT_POSITIONS: CourtPosition[] = ["net", "service_line", "baseline"];
+const POSITION_LABELS: Record<CourtPosition, string> = { net: "Net", service_line: "Service line", baseline: "Baseline" };
+
+export interface SingleStatRow { label: string; value: StatCell }
+
+/**
+ * Where my player stood when points ended. One-sided by design: the opponent's
+ * position is not recorded, so there is no column for it rather than an empty
+ * one implying the data is missing.
+ *
+ * Kept apart from net conversion, which counts points ended by a volley or
+ * overhead. The two measure different things — one is observed position, the
+ * other is inferred from the shot — and merging them would hide which is which.
+ */
+export function courtPositionRows(stats: MatchStats, player: PlayerKey = "my"): SingleStatRow[] {
+  const side = stats[player].courtPosition;
+  const total = COURT_POSITIONS.reduce((sum, key) => sum + side[key].won + side[key].lost, 0);
+  return [
+    ...COURT_POSITIONS.map((key) => {
+      const played = side[key].won + side[key].lost;
+      return {
+        label: POSITION_LABELS[key],
+        value: played ? { value: `${side[key].won}/${played}`, detail: percentage(side[key].won, played) } : { value: "—", detail: "n=0" },
+      };
+    }),
+    { label: "Points with a position recorded", value: { value: String(total), detail: total ? "won/played at each" : "not recorded yet" } },
+  ];
 }

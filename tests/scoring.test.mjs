@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { applyPoint, derivedCompletions, initialScore, numberedPointEvents, pointGameNumber, pointScoreLabel, pointSetNumber, projectScore } from "../lib/tennis/scoring.ts";
-import {DATASET_VERSION, eligiblePointOutcomes, hasCompleteShotDetails, isErrorOutcome, isPointOutcomeValid, pointDetailsPlayer, usesAdvancedShotOptions, usesBallLandingOptions } from "../lib/tennis/model.ts";
+import { applyPoint, derivedCompletions, initialScore, numberedPointEvents, pointGameNumber, pointScoreLabel, pointSetNumber, projectScore, setDurations, formatDuration} from "../lib/tennis/scoring.ts";
+import {FORMAT_RULES, DATASET_VERSION, eligiblePointOutcomes, hasCompleteShotDetails, isErrorOutcome, isPointOutcomeValid, pointDetailsPlayer, usesAdvancedShotOptions, usesBallLandingOptions, usesRallyRange, usesCourtPosition} from "../lib/tennis/model.ts";
 import { buildStats, filterEventsForStatsScope, pointStatsScope, shotImpact, statsScopeOptions} from "../lib/tennis/analytics.ts";
-import { buildPressureAnalytics } from "../lib/tennis/pressure.ts";
+import { buildPressureAnalytics, pressureCategories} from "../lib/tennis/pressure.ts";
 import { createPlayerProfile, linkPlayerIdentity, playerProfileAnalytics, versionPlayerProfile } from "../lib/tennis/profiles.ts";
 import { buildExportBundle, staleStrategyEventIds, zipFiles } from "../lib/tennis/export.ts";
 import { buildCoachReport } from "../lib/tennis/report.ts";
@@ -45,17 +45,36 @@ test("ball landing appears only for return and unforced errors", () => {
   for (const outcome of ["return_winner","winner","forced_error","ace","double_fault"]) assert.equal(usesBallLandingOptions(outcome),false);
 });
 
-test("advanced tray requires one selection from each advanced row before auto-advance", () => {
-  const base = { outcome:"winner",rallyRange:"1-5",finalStroke:"forehand",shotType:"groundstroke" };
-  assert.equal(hasCompleteShotDetails({ ...base, shotSituation:"approach_shot" }), false);
-  assert.equal(hasCompleteShotDetails({ ...base, advancedShotType:"cross_court" }), false);
-  assert.equal(hasCompleteShotDetails({ ...base, shotSituation:"approach_shot",advancedShotType:"cross_court" }), true);
-  assert.equal(hasCompleteShotDetails({ ...base,outcome:"unforced_error" }), false);
-  assert.equal(hasCompleteShotDetails({ ...base,outcome:"unforced_error",ballLanding:"long" }), false);
-  assert.equal(hasCompleteShotDetails({ ...base,outcome:"unforced_error",ballLanding:"long",shotSituation:"passing_shot",advancedShotType:"inside_out" }), true);
-  assert.equal(hasCompleteShotDetails({ ...base,outcome:"forced_error",ballLanding:"side",shotSituation:"approach_shot" }), false);
-  assert.equal(hasCompleteShotDetails({ ...base,outcome:"forced_error",shotSituation:"approach_shot",advancedShotType:"inside_in" }), true);
-  for (const outcome of ["return_winner","return_error","winner","forced_error","unforced_error"]) assert.equal(usesAdvancedShotOptions(outcome),true);
+test("the tray asks only what an outcome can answer, and waits for all of it", () => {
+  const rally = { rallyRange: "1-5", finalStroke: "forehand", shotType: "groundstroke" };
+
+  // A rally ending needs both advanced rows and a court position.
+  const winner = { ...rally, outcome: "winner", shotSituation: "approach_shot", advancedShotType: "cross_court" };
+  assert.equal(hasCompleteShotDetails(winner), false, "court position is still missing");
+  assert.equal(hasCompleteShotDetails({ ...winner, courtPosition: "net" }), true);
+  assert.equal(hasCompleteShotDetails({ ...winner, courtPosition: "net", shotSituation: undefined }), false);
+
+  // An unforced error additionally needs where the ball landed.
+  const unforced = { ...rally, outcome: "unforced_error", shotSituation: "passing_shot", advancedShotType: "down_the_line", courtPosition: "baseline" };
+  assert.equal(hasCompleteShotDetails(unforced), false, "ball landing is still missing");
+  assert.equal(hasCompleteShotDetails({ ...unforced, ballLanding: "long" }), true);
+
+  // A return error asks for neither advanced row, nor rally length, nor position.
+  assert.equal(usesAdvancedShotOptions("return_error"), false);
+  assert.equal(usesRallyRange("return_error"), false);
+  assert.equal(usesCourtPosition("return_error"), false);
+  assert.equal(hasCompleteShotDetails({ finalStroke: "backhand", shotType: "slice", outcome: "return_error", ballLanding: "net" }), true);
+
+  // A return winner keeps the advanced rows — the run-around and passing-shot
+  // distinctions are real on a return — but not rally length or position.
+  assert.equal(usesAdvancedShotOptions("return_winner"), true);
+  assert.equal(usesRallyRange("return_winner"), false);
+  assert.equal(usesCourtPosition("return_winner"), false);
+  assert.equal(hasCompleteShotDetails({ finalStroke: "forehand", shotType: "groundstroke", outcome: "return_winner", shotSituation: "passing_shot", advancedShotType: "cross_court" }), true);
+
+  // Position is asked for every rally ending and no serve ending.
+  for (const outcome of ["winner", "forced_error", "unforced_error"]) assert.equal(usesCourtPosition(outcome), true, outcome);
+  for (const outcome of ["ace", "double_fault", "return_winner", "return_error"]) assert.equal(usesCourtPosition(outcome), false, outcome);
 });
 
 test("winner and forced-error shot details belong to the point winner", () => {
@@ -532,4 +551,90 @@ test("pressure rows omit categories nobody reached", () => {
   const labels = pressureRows(buildPressureAnalytics(match)).map((entry) => entry.label);
   assert.ok(labels.includes("All pressure points"));
   assert.ok(!labels.includes("Late in a tiebreak"), "no tiebreak was played");
+});
+
+test("a format declares how long its deciding tiebreak is", () => {
+  // Short sets decide on a 7-point tiebreak; sets-to-6 on a 10-point one.
+  const short = matchFrom([], { format: "short_sets_match_tiebreak" });
+  const long = matchFrom([], { format: "best_of_3_match_tiebreak" });
+  assert.equal(FORMAT_RULES[short.config.format].matchTiebreakTarget, 7);
+  assert.equal(FORMAT_RULES[long.config.format].matchTiebreakTarget, 10);
+
+  // Reaching one set all opens the decider at the format's own length.
+  const decider = (format, target) => {
+    let score = initialScore("my");
+    for (let game = 0; game < (format === "short_sets_match_tiebreak" ? 4 : 6); game += 1) score = winGame(score, "my", format);
+    for (let game = 0; game < (format === "short_sets_match_tiebreak" ? 4 : 6); game += 1) score = winGame(score, "opponent", format);
+    assert.equal(score.sets.length, 2, `${format}: two sets should be complete`);
+    assert.equal(score.inTiebreak, true, `${format}: the decider should be a tiebreak`);
+    assert.equal(score.tiebreakTarget, target, `${format}: wrong decider length`);
+    return score;
+  };
+  decider("short_sets_match_tiebreak", 7);
+  decider("best_of_3_match_tiebreak", 10);
+});
+
+test("a seven-point decider is still recognised as the match tiebreak", () => {
+  const format = "short_sets_match_tiebreak";
+  let score = initialScore("my");
+  for (let game = 0; game < 4; game += 1) score = winGame(score, "my", format);
+  for (let game = 0; game < 4; game += 1) score = winGame(score, "opponent", format);
+  // Win it 7-5, which a 10-point decider would not have ended.
+  for (let point = 0; point < 5; point += 1) { score = applyPoint(score, "my", format, true); score = applyPoint(score, "opponent", format, true); }
+  for (let point = 0; point < 2; point += 1) score = applyPoint(score, "my", format, true);
+  assert.equal(score.matchComplete, true, "7-5 should decide a 7-point tiebreak");
+  assert.equal(score.sets.at(-1).isMatchTiebreak, true, "recorded as a match tiebreak, not an ordinary set");
+  assert.deepEqual(score.sets.at(-1).tiebreak, [7, 5]);
+});
+
+test("late-tiebreak pressure follows the decider's length", () => {
+  // Two points short of the target: 5-5 in a seven, 8-8 in a ten.
+  for (const [format, lateAt, target] of [["short_sets_match_tiebreak", 5, 7], ["best_of_3_match_tiebreak", 8, 10]]) {
+    const match = matchFrom([], { format });
+    const before = { ...initialScore("my"), inTiebreak: true, tiebreakTarget: target, sets: [{ games: [4, 6] }, { games: [6, 4] }], points: [lateAt, lateAt] };
+    const point = completedPoint("my");
+    point.payload.scoreBefore = before;
+    assert.ok(pressureCategories(point, { ...match, events: [point] }).includes("late_tiebreak"), `${format} should be late at ${lateAt}-${lateAt}`);
+  }
+});
+
+/** Builds a match whose events carry controllable timestamps. */
+function timedMatch(entries) {
+  const config = { myPlayerName: "Ethan", opponentName: "Noah", format: "short_sets", firstServer: "my", adScoring: true, startingMentalState: { my: "focused", opponent: "not_observed" } };
+  const at = (minutes) => new Date(Date.UTC(2026, 9, 4, 12, minutes)).toISOString();
+  return { config, at, events: entries.map((entry, index) => ({ id: `e${index}`, matchId: "m", schemaVersion: 1, sequence: index + 1, timestamp: at(entry.minute), source: "tracked", ...entry.event })) };
+}
+
+test("a set runs from the previous set's end, so durations leave no gap", () => {
+  const { events } = timedMatch([
+    // Warm-up before the first point is not part of the first set.
+    { minute: 10, event: { type: "point_completed", pointGroupId: "g1", payload: { winner: "my", loser: "opponent", server: "my", receiver: "opponent", serveAttempt: 1, serveResult: "in", faults: 0, scoreBefore: initialScore("my"), scoreAfter: initialScore("my"), mentalContext: { my: "focused", opponent: "not_observed" } } } },
+    { minute: 40, event: { type: "set_completed", pointGroupId: "g1", payload: { setNumber: 1, winner: "my", games: [4, 1], setsWon: [1, 0] } } },
+    { minute: 45, event: { type: "point_completed", pointGroupId: "g2", payload: { winner: "my", loser: "opponent", server: "my", receiver: "opponent", serveAttempt: 1, serveResult: "in", faults: 0, scoreBefore: initialScore("my"), scoreAfter: initialScore("my"), mentalContext: { my: "focused", opponent: "not_observed" } } } },
+    { minute: 80, event: { type: "set_completed", pointGroupId: "g2", payload: { setNumber: 2, winner: "opponent", games: [2, 4], setsWon: [1, 1] } } },
+  ]);
+  const durations = setDurations(events);
+  assert.equal(durations.length, 2);
+  assert.equal(durations[0].seconds, 30 * 60, "first set: first point to set end");
+  // The changeover belongs to set two, so the two durations are contiguous.
+  assert.equal(durations[1].seconds, 40 * 60, "second set: previous end to its own end");
+  assert.equal(durations[0].endedAt, durations[1].startedAt, "no time falls between sets");
+});
+
+test("a set closed by a manual correction ends and restarts at the correction", () => {
+  const before = initialScore("my");
+  const corrected = { ...initialScore("my"), sets: [{ games: [4, 2] }], setsWon: [1, 0] };
+  const { events } = timedMatch([
+    { minute: 5, event: { type: "point_completed", pointGroupId: "g1", payload: { winner: "my", loser: "opponent", server: "my", receiver: "opponent", serveAttempt: 1, serveResult: "in", faults: 0, scoreBefore: before, scoreAfter: before, mentalContext: { my: "focused", opponent: "not_observed" } } } },
+    { minute: 35, event: { type: "score_synced", payload: { previous: before, corrected, reason: "Missed points", valid: true } } },
+  ]);
+  const durations = setDurations(events);
+  assert.equal(durations.length, 1);
+  assert.equal(durations[0].seconds, 30 * 60);
+});
+
+test("durations are formatted the same wherever they are shown", () => {
+  assert.equal(formatDuration(47 * 60), "47m");
+  assert.equal(formatDuration(84 * 60), "1h 24m");
+  assert.equal(formatDuration(0), "—");
 });

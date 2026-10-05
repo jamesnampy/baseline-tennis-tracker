@@ -12,13 +12,13 @@
  */
 import { buildStats, filterEventsForStatsScope, statsScopeOptions, strategyReview, type StatsScope } from "./analytics.ts";
 import {
-  landingRows, matchRows, pressureRows, rallyRows, shotRows, SHOT_LABELS,
-  type StatCell, type StatRow,
+  courtPositionRows, landingRows, matchRows, pressureRows, rallyRows, shotRows, SHOT_LABELS,
+  type SingleStatRow, type StatCell, type StatRow,
 } from "./stattables.ts";
 import { DATASET_VERSION } from "./model.ts";
 import type { MatchRecord, PlayerKey } from "./model.ts";
 import { buildPressureAnalytics } from "./pressure.ts";
-import { activePointEvents, pointDetailsMap, projectScore, scoreSummary } from "./scoring.ts";
+import { activePointEvents, formatDuration, pointDetailsMap, projectScore, scoreSummary, setDurations } from "./scoring.ts";
 
 export interface CoachReportOptions {
   opponentIdentity: boolean;
@@ -47,6 +47,11 @@ const esc = (value: unknown) =>
 const cell = (value: StatCell) =>
   `${esc(value.value)}${value.detail ? ` <span class="muted">(${esc(value.detail)})</span>` : ""}`;
 
+const singleTable = (heading: string, rows: SingleStatRow[]) =>
+  `<table><thead><tr><th>${esc(heading)}</th><th>Won</th></tr></thead><tbody>${
+    rows.map((entry) => `<tr><td>${esc(entry.label)}</td><td>${cell(entry.value)}</td></tr>`).join("")
+  }</tbody></table>`;
+
 const table = (left: string, right: string, rows: StatRow[]) =>
   `<table><thead><tr><th>Statistic</th><th>${esc(left)}</th><th>${esc(right)}</th></tr></thead><tbody>${
     rows.map((entry) => `<tr><td>${esc(entry.label)}</td><td>${cell(entry.my)}</td><td>${cell(entry.opponent)}</td></tr>`).join("")
@@ -61,6 +66,7 @@ export function buildCoachReport(match: MatchRecord, options: CoachReportOptions
   const names: Record<PlayerKey, string> = { my: match.config.myPlayerName, opponent };
   const review = strategyReview(stats, { ...match.config, opponentName: opponent });
 
+  const durations = setDurations(match.events);
   const setSummary = score.sets.map((set, index) => {
     const winner = set.isMatchTiebreak
       ? (set.tiebreak?.[0] ?? 0) > (set.tiebreak?.[1] ?? 0) ? "my" : "opponent"
@@ -68,7 +74,8 @@ export function buildCoachReport(match: MatchRecord, options: CoachReportOptions
     const label = set.isMatchTiebreak
       ? `Match tiebreak ${set.tiebreak?.[0] ?? 0}–${set.tiebreak?.[1] ?? 0}`
       : `${set.games[0]}–${set.games[1]}${set.tiebreak ? ` (${set.tiebreak[0]}–${set.tiebreak[1]})` : ""}`;
-    return `<tr><td>Set ${index + 1}</td><td>${esc(label)}</td><td>${esc(names[winner as PlayerKey])}</td></tr>`;
+    const took = durations.find((entry) => entry.setNumber === index + 1);
+    return `<tr><td>Set ${index + 1}</td><td>${esc(label)}</td><td>${esc(names[winner as PlayerKey])}</td><td>${took ? esc(formatDuration(took.seconds)) : "—"}</td></tr>`;
   }).join("");
 
   const timeline = points.map((point, index) => {
@@ -101,6 +108,8 @@ export function buildCoachReport(match: MatchRecord, options: CoachReportOptions
 <p class="muted small">Pressure context is derived from the score immediately before each tracked point. A point can belong to more than one pressure category; the total counts it once.</p></section>` : "")
       + (options.shotAnalytics ? `<section class="card"><h2>Shot analytics</h2><div class="scroll">${table(match.config.myPlayerName, opponent, shotRows(scopeStats))}</div>
 <h3>Points won by rally length</h3><div class="scroll">${table(match.config.myPlayerName, opponent, rallyRows(scopeStats))}</div>
+<h3>Court position · ${esc(match.config.myPlayerName)}</h3><div class="scroll">${singleTable("Where points ended", courtPositionRows(scopeStats))}</div>
+<p class="muted small">Recorded for one player only, on rally endings, and optional — so the sample is smaller than the point count. Net conversion above counts points ended by a volley or overhead, which is a different measurement.</p>
 <h3>Where errors landed</h3><div class="scroll">${table(match.config.myPlayerName, opponent, landingRows(scopeStats))}</div>
 <p class="muted small">Impact is the point endings that won the point minus the ones that lost it, shown as +/− with wins, errors, and sample size. A winner, return winner, or forced error is credited to the point winner; an unforced error or return error to the point loser. Based only on observed point-ending shots—not every stroke in the rally.</p></section>` : "")
       + `</div>`;
@@ -157,7 +166,7 @@ ul{margin:6px 0;padding-left:18px}li{margin:4px 0}
 <p class="scoreline">${esc(scoreSummary(score, match.config))} · ${winnerLine}</p>
 <p class="muted small">${esc(match.config.date ?? "")}${match.config.tournamentName ? ` · ${esc(match.config.tournamentName)}` : ""}${match.config.round ? ` · ${esc(match.config.round)}` : ""}${match.config.location ? ` · ${esc(match.config.location)}` : ""} · ${esc(match.config.format.replaceAll("_", " "))} · ${match.config.adScoring ? "ad" : "no-ad"} scoring</p>
 
-${score.sets.length ? `<section class="card"><h2>Set by set</h2><div class="scroll"><table class="timeline-table"><thead><tr><th>Set</th><th>Score</th><th>Won by</th></tr></thead><tbody>${setSummary}</tbody></table></div></section>` : ""}
+${score.sets.length ? `<section class="card"><h2>Set by set</h2><div class="scroll"><table class="timeline-table"><thead><tr><th>Set</th><th>Score</th><th>Won by</th><th>Took</th></tr></thead><tbody>${setSummary}</tbody></table></div></section>` : ""}
 
 ${tabBar}
 

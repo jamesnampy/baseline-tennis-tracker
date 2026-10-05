@@ -54,3 +54,13 @@
 .stat-row{min-height:44px;padding-top:4px;padding-bottom:4px}
 
 .strategy-waiting{font-size:10px;line-height:1.5;color:#bcd08a;margin:9px 0 0}
+
+/* A chosen fault landing collapses to a line that reopens on a tap. */
+.serve-landing-chosen{display:block;width:calc(100% - 28px);margin:10px 14px 0;padding:0 11px;min-height:38px;border:1px solid var(--line);border-radius:11px;background:var(--panel);font-size:11px;font-weight:800;text-align:left;color:var(--muted)}.serve-landing-chosen strong{color:var(--ink)}.serve-landing-chosen em{float:right;font-style:normal;font-size:9px;text-transform:uppercase;letter-spacing:.08em;line-height:38px}
+/* The home hero drops its explanation once there are matches to show. */
+.hero-card.compact{padding:18px 23px;margin-bottom:14px}.hero-card.compact .primary-button{margin-top:0}
+
+.stats-table.single .stat-row{grid-template-columns:1fr auto}.stats-table.single .stat-row span{text-align:left}.stats-table.single .stat-row b{text-align:right}
+.scope-duration{font-size:10px;font-weight:850;color:var(--muted);margin:0 0 10px;letter-spacing:.02em}
+
+.set-durations{font-size:10px;font-weight:850;color:var(--muted);margin:0 0 10px;letter-spacing:.02em;white-space:pre-wrap}

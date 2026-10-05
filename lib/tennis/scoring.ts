@@ -56,7 +56,7 @@ function beginNextSet(score: ScoreState, format: MatchFormatId) {
     score.games = [0, 0];
     score.points = [0, 0];
     score.inTiebreak = true;
-    score.tiebreakTarget = 10;
+    score.tiebreakTarget = rules.matchTiebreakTarget ?? 10;
     score.tiebreakStartServer = score.server;
     return;
   }
@@ -76,7 +76,7 @@ function completeRegularSet(score: ScoreState, winnerIndex: 0 | 1, format: Match
 
 function completeTiebreak(score: ScoreState, winnerIndex: 0 | 1, format: MatchFormatId) {
   const tiebreak = [...score.points] as [number, number];
-  const isMatchTiebreak = score.tiebreakTarget === 10 && score.sets.length === 2;
+  const isMatchTiebreak = FORMAT_RULES[format].matchTiebreakThird && score.sets.length === 2;
   const startingServer = score.tiebreakStartServer ?? score.server;
   if (isMatchTiebreak) {
     score.sets.push({
@@ -340,4 +340,64 @@ export function isBreakPoint(score: ScoreState, server: PlayerKey, adScoring: bo
   const s = score.points[PLAYER_INDEX[server]];
   if (!adScoring) return r === 3;
   return r >= 3 && r > s;
+}
+
+export interface SetDuration {
+  setNumber: number;
+  startedAt: string;
+  endedAt: string;
+  /** Whole seconds between the two, so every surface rounds the same way. */
+  seconds: number;
+}
+
+/**
+ * How long each completed set took.
+ *
+ * A set starts when the previous one ended, so the changeover belongs to the set
+ * about to be played and the durations sum to the match with nothing
+ * unaccounted. The first set starts at its first tracked point rather than at
+ * match creation, because the gap before the first point is warm-up.
+ *
+ * A manual score correction that closes a set ends it at the moment of the
+ * correction and starts the next one there too — the points in between were
+ * never tracked, so there is no better boundary available.
+ *
+ * This is wall-clock. A match paused for rain or lunch carries that time in
+ * whichever set was in progress; reporting it raw is honest, and subtracting
+ * gaps would need a threshold that is arbitrary at any value.
+ */
+export function setDurations(events: MatchEvent[]): SetDuration[] {
+  const voided = voidedPointIds(events);
+  const durations: SetDuration[] = [];
+  let setStart: string | undefined;
+  let setNumber = 1;
+
+  for (const event of events) {
+    if ("pointGroupId" in event && event.pointGroupId && voided.has(event.pointGroupId)) continue;
+
+    if (event.type === "point_completed" && !setStart) setStart = event.timestamp;
+
+    const closesASet = event.type === "set_completed"
+      || (event.type === "score_synced" && event.payload.corrected.sets.length > event.payload.previous.sets.length);
+    if (!closesASet || !setStart) continue;
+
+    durations.push({
+      setNumber,
+      startedAt: setStart,
+      endedAt: event.timestamp,
+      seconds: Math.max(0, Math.round((Date.parse(event.timestamp) - Date.parse(setStart)) / 1000)),
+    });
+    setNumber += 1;
+    // The next set begins where this one ended, so no time falls between them.
+    setStart = event.timestamp;
+  }
+  return durations;
+}
+
+/** `1h 24m` or `47m`, or `—` when a set has no measurable length. */
+export function formatDuration(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) return "—";
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  return `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, "0")}m`;
 }

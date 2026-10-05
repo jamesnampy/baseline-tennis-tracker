@@ -51,6 +51,7 @@ export type PointOutcome =
   | "double_fault";
 
 export type RallyRange = "1-5" | "6-10" | "11-20" | "21+";
+/** `neither` is retired from the interface and kept only so older events read. */
 export type FinalStroke = "forehand" | "backhand" | "neither";
 export type BallLanding = "net" | "long" | "side";
 export type ShotType =
@@ -61,11 +62,17 @@ export type ShotType =
   | "lob"
   | "overhead";
 export type ShotSituation = "approach_shot" | "passing_shot";
+/** Where a player stood when the point ended — not where they stood during it. */
+export type CourtPosition = "net" | "service_line" | "baseline";
 export type AdvancedShotType =
   // passing_shot remains readable for events captured before schema 1.2.1.
   | "passing_shot"
   | "cross_court"
   | "inside_out"
+  | "down_the_line"
+  // inside_in is retired from the interface. It was offered where down_the_line
+  // belonged, and was recorded as a direction rather than as a run-around
+  // forehand, so those events read as down-the-line.
   | "inside_in";
 
 export interface MatchConfig {
@@ -125,6 +132,13 @@ export interface PointDetails {
    */
   firstServeLanding?: BallLanding;
   secondServeLanding?: BallLanding;
+  /**
+   * Court position at the moment the point ended. Unlike the shot details, this
+   * describes a fixed player rather than whoever hit last: being at the baseline
+   * when passed is as informative as being at the net when finishing.
+   */
+  courtPosition?: CourtPosition;
+  courtPositionPlayer?: PlayerKey;
 }
 
 export interface EventBase {
@@ -338,6 +352,14 @@ export interface FormatRule {
   gamesToWin: number;
   tiebreakAt?: number;
   matchTiebreakThird: boolean;
+  /**
+   * Points in the deciding tiebreak, when the format replaces a third set with
+   * one. Declared per format because it is not always 10: a short-set match
+   * decides on a 7-point tiebreak. Nothing should infer which tiebreak it is
+   * from this number — ask the format whether it has a deciding tiebreak, and
+   * the score whether two sets are complete.
+   */
+  matchTiebreakTarget?: 7 | 10;
   bestOfSets: 1 | 3;
 }
 
@@ -360,6 +382,7 @@ export const FORMAT_RULES: Record<MatchFormatId, FormatRule> = {
     gamesToWin: 6,
     tiebreakAt: 6,
     matchTiebreakThird: true,
+    matchTiebreakTarget: 10,
     bestOfSets: 3,
   },
   short_sets: {
@@ -374,12 +397,13 @@ export const FORMAT_RULES: Record<MatchFormatId, FormatRule> = {
   },
   short_sets_match_tiebreak: {
     id: "short_sets_match_tiebreak",
-    label: "Short Sets · 10-Point Match Tiebreak",
+    label: "Short Sets · 7-Point Match Tiebreak",
     shortLabel: "Short + MTB",
-    description: "Sets to 4 · deciding set is a 10-point tiebreak",
+    description: "Sets to 4 · 7-point tiebreak at 3–3 · deciding set is a 7-point tiebreak",
     gamesToWin: 4,
     tiebreakAt: 3,
     matchTiebreakThird: true,
+    matchTiebreakTarget: 7,
     bestOfSets: 3,
   },
   pro_8: {
@@ -415,8 +439,25 @@ export function isErrorOutcome(outcome?: PointOutcome): boolean {
   return outcome === "return_error" || outcome === "forced_error" || outcome === "unforced_error";
 }
 
+/**
+ * Rally length is asked only where it can vary. A return outcome ends two shots
+ * in, so it is always 1-5 and is set automatically rather than offered.
+ */
+export function usesRallyRange(outcome?: PointOutcome): boolean {
+  return outcome !== "return_winner" && outcome !== "return_error";
+}
+
+/**
+ * Court position is asked only where a rally developed. An ace or double fault
+ * ends on the serve, and a return outcome ends with both players at the
+ * baseline, so neither tells you anything about position.
+ */
+export function usesCourtPosition(outcome?: PointOutcome): boolean {
+  return outcome === "winner" || outcome === "forced_error" || outcome === "unforced_error";
+}
+
 export function usesAdvancedShotOptions(outcome?: PointOutcome): boolean {
-  return outcome === "return_winner" || outcome === "return_error" || outcome === "winner" || outcome === "forced_error" || outcome === "unforced_error";
+  return outcome === "return_winner" || outcome === "winner" || outcome === "forced_error" || outcome === "unforced_error";
 }
 
 export function usesBallLandingOptions(outcome?: PointOutcome): boolean {
@@ -432,11 +473,12 @@ export function pointDetailsPlayer(point: PointCompletedEvent, outcome: PointOut
 export function hasCompleteShotDetails(details: PointDetails): boolean {
   const advancedComplete = !usesAdvancedShotOptions(details.outcome) || Boolean(details.shotSituation && details.advancedShotType);
   return Boolean(
-    details.rallyRange &&
+    (!usesRallyRange(details.outcome) || details.rallyRange) &&
     details.finalStroke &&
     details.shotType &&
     advancedComplete &&
-    (!usesBallLandingOptions(details.outcome) || details.ballLanding),
+    (!usesBallLandingOptions(details.outcome) || details.ballLanding) &&
+    (!usesCourtPosition(details.outcome) || details.courtPosition),
   );
 }
 

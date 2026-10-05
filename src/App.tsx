@@ -3,18 +3,19 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { buildStats, filterEventsForStatsScope, percentage, statsScopeOptions, shotImpact, strategyReview, type StatsScope } from "@/lib/tennis/analytics";
 import { buildPressureAnalytics } from "@/lib/tennis/pressure";
-import { landingRows, matchRows, pressureRows, rallyRows, type StatRow } from "@/lib/tennis/stattables";
+import { courtPositionRows, landingRows, matchRows, pressureRows, rallyRows, WINNER_PATTERNS, type SingleStatRow, type StatRow } from "@/lib/tennis/stattables";
 import { buildExportBundle, downloadExport, zipFiles } from "@/lib/tennis/export";
 import {
   AdvancedShotType, BallLanding, deepCloneScore, eligiblePointOutcomes, FinalStroke, FORMAT_RULES, hasCompleteShotDetails, MatchConfig,
   IdentityMapping, MatchEvent, MatchRecord, MentalState, otherPlayer, PlayerKey, PlayerProfile, PointDetails,
-  pointDetailsPlayer, PointCompletedEvent, PointOutcome, RallyRange, ScoreState, ShotSituation, ShotType, usesAdvancedShotOptions, usesBallLandingOptions,
+  CourtPosition, pointDetailsPlayer, PointCompletedEvent, PointOutcome, RallyRange, ScoreState, ShotSituation, ShotType, usesAdvancedShotOptions, usesBallLandingOptions, usesCourtPosition, usesRallyRange,
 } from "@/lib/tennis/model";
 import { createPlayerProfile, linkPlayerIdentity, playerProfileAnalytics, versionPlayerProfile } from "@/lib/tennis/profiles";
 import { DEFAULT_REPORT_OPTIONS, type CoachReportOptions } from "@/lib/tennis/report";
 import {
   activePointEvents, applyPoint, derivedCompletions, initialScore, numberedPointEvents, pointDetailsMap, pointGameNumber,
   pointScoreLabel, pointSetNumber, projectScore, scoreSummary, voidedPointIds,
+  formatDuration, setDurations,
 } from "@/lib/tennis/scoring";
 import { deleteMatch, loadIdentityMappings, loadMatches, loadPlayers, loadSyncStates, saveIdentityMapping, saveMatch, savePlayer, type MatchSyncState } from "@/lib/tennis/storage";
 import {
@@ -42,7 +43,7 @@ const outcomeLabels: Record<PointOutcome, string> = {
 const shotLabels: Record<string, string> = {
   groundstroke: "Groundstroke", slice: "Slice", volley: "Volley", drop_shot: "Drop Shot",
   lob: "Lob", overhead: "Overhead", passing_shot: "Passing Shot", cross_court: "Cross-Court",
-  approach_shot: "Approach Shot", inside_out: "Inside-Out", inside_in: "Inside-In", forehand: "Forehand",
+  approach_shot: "Approach Shot", inside_out: "Inside-Out", down_the_line: "Down the Line", inside_in: "Inside-In (now Down the Line)", forehand: "Forehand",
   backhand: "Backhand", neither: "Neither", net: "Net", long: "Long", side: "Side",
 };
 const defaultConfig: MatchConfig = {
@@ -125,7 +126,7 @@ export default function Home() {
   if (homeView !== "matches") return <DataHub view={homeView} setView={setHomeView} players={players} matches={matches} mappings={mappings} onMap={(mapping) => { setMappings((rows) => [...rows, mapping]); saveIdentityMapping(mapping); }} />;
   return <main className="app-shell home-screen">
     <header className="brand-header"><span className="brand-mark">B</span><div><strong>Baseline</strong><small>Tennis match tracker</small></div></header>
-    <section className="hero-card"><p className="eyebrow">COURTSIDE · OFFLINE READY</p><h1>Track the match.<br />See the patterns.</h1><p>Fast, one-handed scoring with both-player stats, a complete timeline, and portable match data.</p><button className="primary-button" onClick={() => { setConfig({ ...defaultConfig, date: new Date().toISOString().slice(0, 10) }); setScreen("setup"); }}>Start a new match <span>→</span></button></section>
+    <section className={matches.length ? "hero-card compact" : "hero-card"}>{!matches.length && <><p className="eyebrow">COURTSIDE · OFFLINE READY</p><h1>Track the match.<br />See the patterns.</h1><p>Fast, one-handed scoring with both-player stats, a complete timeline, and portable match data.</p></>}<button className="primary-button" onClick={() => { setConfig({ ...defaultConfig, date: new Date().toISOString().slice(0, 10) }); setScreen("setup"); }}>Start a new match <span>→</span></button></section>
     <section className="saved-matches"><div className="section-heading"><div><p className="eyebrow">ON THIS DEVICE</p><h2>Recent matches</h2></div><span className="local-badge">● Saved locally</span></div>
       {!matches.length ? <div className="empty-card"><strong>No matches yet</strong><p>Your unfinished and completed matches will appear here.</p></div> : matches.map((item) => { const score = projectScore(item.events, item.config); return <div className="match-list-wrap" key={item.id}><button className="match-list-card" onClick={() => { setMatch(item); setScreen("match"); }}><span><strong>{item.config.myPlayerName}</strong><small>vs. {item.config.opponentName}</small></span><span className="match-list-score"><strong>{scoreSummary(score, item.config)}</strong><small>{score.matchComplete ? "Complete" : "Resume match"} · {new Date(item.updatedAt).toLocaleDateString()}</small></span><b>›</b></button>{!score.matchComplete && <button className="delete-match" aria-label={`Delete unfinished match against ${item.config.opponentName}`} onClick={() => { if (window.confirm(`Delete the unfinished match against ${item.config.opponentName}? This cannot be undone.`)) { deleteMatch(item.id).then(() => setMatches((rows) => rows.filter((row) => row.id !== item.id))); } }}>Delete</button>}</div>; })}
     </section><HomeNav view={homeView} setView={setHomeView} />
@@ -304,6 +305,7 @@ function MatchTracker({ match, setMatch, saved, onExit }: { match: MatchRecord; 
   const mental = useMemo(() => currentMentalState(match), [match]);
   useEffect(() => { const update = () => setOnline(navigator.onLine); window.addEventListener("online", update); window.addEventListener("offline", update); return () => { window.removeEventListener("online", update); window.removeEventListener("offline", update); }; }, []);
   useEffect(() => { if (stage === "details" && hasCompleteShotDetails(details)) { const timer = window.setTimeout(() => finishDetails(), 180); return () => window.clearTimeout(timer); } }, [details, stage]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (stage === "serve_landing" && details.secondServeLanding) { const timer = window.setTimeout(() => finishDetails(), 180); return () => window.clearTimeout(timer); } }, [details, stage]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function append(events: MatchEvent[]) { setMatch({ ...match, updatedAt: new Date().toISOString(), events: [...match.events, ...events] }); }
   function makeServeEvent(pointGroupId: string, result: "in" | "fault" | "ace", attempt: 1 | 2, offset = 1): MatchEvent { return { ...eventBase(match, offset), source: "tracked", type: "serve_attempted", pointGroupId, payload: { server: score.server, attempt, result } }; }
@@ -363,7 +365,7 @@ function MatchTracker({ match, setMatch, saved, onExit }: { match: MatchRecord; 
     const point = points.find((item) => item.pointGroupId === pendingPointId); if (!point) return;
     if (!eligiblePointOutcomes(point).includes(outcome)) return;
     const owner = pointDetailsPlayer(point, outcome);
-    setDetails((current) => ({ ...current, outcome, rallyRange: outcome.startsWith("return_") ? "1-5" : undefined, responsiblePlayer: owner, benefitingPlayer: point.payload.winner, finalStrokePlayer: owner })); setStage("details");
+    setDetails((current) => ({ ...current, outcome, courtPositionPlayer: "my", rallyRange: outcome.startsWith("return_") ? "1-5" : undefined, responsiblePlayer: owner, benefitingPlayer: point.payload.winner, finalStrokePlayer: owner })); setStage("details");
   }
   function finishDetails() { if (pendingPointId && Object.values(details).some((value) => value !== undefined)) append([{ ...eventBase(match), source: "tracked", type: "point_annotated", pointGroupId: pendingPointId, payload: details }]); resetPointEntry(); }
   function undoPoint() {
@@ -403,7 +405,7 @@ function MatchTracker({ match, setMatch, saved, onExit }: { match: MatchRecord; 
     return result;
   }
   if (score.matchComplete && tab === "track") return <CompletedView match={match} score={score} stats={stats} saved={saved} onTab={setTab} onExit={onExit} />;
-  return <main className="app-shell tracker-shell"><header className="match-bar"><button className="icon-button" aria-label="Exit match" onClick={onExit}>×</button><div><span>SET {score.sets.length + 1} · {score.inTiebreak ? (score.tiebreakTarget === 10 ? "MATCH TIEBREAK" : "TIEBREAK") : "LIVE"}</span><strong>{match.config.myPlayerName} vs. {match.config.opponentName}</strong><small className={saved ? "save-state saved" : "save-state"}>● {saved ? "Saved on device" : "Saving…"}</small></div><button className="undo icon-button" disabled={!points.length || undoCount >= 5} onClick={undoPoint}>↶<small>Undo</small></button></header>
+  return <main className="app-shell tracker-shell"><header className="match-bar"><button className="icon-button" aria-label="Exit match" onClick={onExit}>×</button><div><span>SET {score.sets.length + 1} · {score.inTiebreak ? (FORMAT_RULES[match.config.format].matchTiebreakThird && score.sets.length >= 2 ? "MATCH TIEBREAK" : "TIEBREAK") : "LIVE"}</span><strong>{match.config.myPlayerName} vs. {match.config.opponentName}</strong><small className={saved ? "save-state saved" : "save-state"}>● {saved ? "Saved on device" : "Saving…"}</small></div><button className="undo icon-button" disabled={!points.length || undoCount >= 5} onClick={undoPoint}>↶<small>Undo</small></button></header>
     <Scoreboard match={match} score={score} onSync={() => setScoreModal(true)} /><section className="tracker-content">{stage === "serve" && <ServeStage score={score} config={match.config} serveAttempt={serveAttempt} onServe={onServe} onFirstServer={points.length ? undefined : chooseFirstServer} firstServeLanding={details.firstServeLanding} onFirstServeLanding={(landing) => setLanding("firstServeLanding", landing)} />}{stage === "winner" && <WinnerStage config={match.config} onWinner={chooseWinner} />}{stage === "outcome" && <OutcomeStage allowedOutcomes={pendingPoint ? eligiblePointOutcomes(pendingPoint) : []} onOutcome={chooseOutcome} onSkip={finishDetails} />}{stage === "details" && <DetailsTray details={details} setDetails={setDetails} onContinue={finishDetails} />}{stage === "serve_landing" && <ServeLandingStage onSelect={(landing) => setLanding("secondServeLanding", landing)} onDone={finishDetails} selected={details.secondServeLanding} />}</section>
     {boundaryPrompt && <div className="boundary-prompt"><span>{boundaryPrompt === "set_end" ? "End of set" : "End of game"} — note how {match.config.myPlayerName} looks?</span><button onClick={() => { setMentalMoment(boundaryPrompt); setMentalModal("my"); setBoundaryPrompt(undefined); }}>Observe</button><button className="boundary-dismiss" aria-label="Dismiss reminder" onClick={() => setBoundaryPrompt(undefined)}>×</button></div>}
     <button className="mental-pill" onClick={() => { setMentalMoment(pendingPointId ? "after_point" : "manual"); setMentalModal("my"); }}><span className={`mental-dot ${mental.my}`} /> {match.config.myPlayerName} is {mentalLabels[mental.my].toLowerCase()} <b>Change</b></button><div className="connection-strip"><span>● {online ? "Online" : "Offline tracking"}</span><span>{stats.coverage}% tracked</span></div><BottomNav tab={tab} onTab={setTab} />
@@ -424,8 +426,14 @@ function Scoreboard({ match, score, onSync }: { match: MatchRecord; score: Score
  * nothing and ignoring it costs nothing either.
  */
 function ServeLandingRow({ label, selected, onSelect }: { label: string; selected?: BallLanding; onSelect: (landing?: BallLanding) => void }) {
+  const [open, setOpen] = useState(false);
+  if (selected && !open) {
+    return <button className="serve-landing-chosen" onClick={() => setOpen(true)}>
+      {label} · <strong>{landingLabels[selected]}</strong> <em>change</em>
+    </button>;
+  }
   return <div className="serve-landing"><p>{label} <em>· optional</em></p><div>
-    {BALL_LANDINGS.map((landing) => <button key={landing} className={selected === landing ? "selected" : ""} onClick={() => onSelect(selected === landing ? undefined : landing)}>{landingLabels[landing]}</button>)}
+    {BALL_LANDINGS.map((landing) => <button key={landing} className={selected === landing ? "selected" : ""} onClick={() => { onSelect(selected === landing ? undefined : landing); setOpen(false); }}>{landingLabels[landing]}</button>)}
   </div></div>;
 }
 
@@ -433,22 +441,37 @@ function ServeLandingRow({ label, selected, onSelect }: { label: string; selecte
 function ServeLandingStage({ selected, onSelect, onDone }: { selected?: BallLanding; onSelect: (landing?: BallLanding) => void; onDone: () => void }) {
   return <><div className="point-prompt compact"><p className="eyebrow">DOUBLE FAULT</p><h1>Where did it land?</h1><p>Optional—choose one, or keep moving.</p></div>
     <div className="landing-grid">{BALL_LANDINGS.map((landing) => <button className={selected === landing ? "selected" : ""} key={landing} onClick={() => onSelect(selected === landing ? undefined : landing)}>{landingLabels[landing]}</button>)}</div>
-    <button className="skip-button" onClick={onDone}>{selected ? "Save and continue" : "Skip details"} <span>→</span></button></>;
+    <button className="skip-button" onClick={onDone}>Skip details <span>→</span></button></>;
 }
 
 function ServeStage({ score, config, serveAttempt, onServe, firstServeLanding, onFirstServeLanding, onFirstServer }: { score: ScoreState; config: MatchConfig; serveAttempt: 1 | 2; onServe: (result: "in" | "fault" | "ace") => void; firstServeLanding?: BallLanding; onFirstServeLanding: (landing?: BallLanding) => void; onFirstServer?: (player: PlayerKey) => void }) { return <><div className="point-prompt"><p className="eyebrow">POINT · {playerName(config, score.server).toUpperCase()} SERVING</p><div className="serve-title"><h1>{serveAttempt === 1 ? "First serve" : "Second serve"}</h1><div className="serve-balls" aria-label={`${3 - serveAttempt} serves available`}><i className="ball" />{serveAttempt === 1 ? <i className="ball" /> : <i className="ball spent" />}</div></div></div>{onFirstServer && <div className="first-server-pick"><p>Who serves first?</p><div className="segmented"><button className={score.server === "my" ? "selected" : ""} onClick={() => onFirstServer("my")}>{config.myPlayerName}</button><button className={score.server === "opponent" ? "selected" : ""} onClick={() => onFirstServer("opponent")}>{config.opponentName}</button></div></div>}<div className="serve-grid"><button className="big-action serve-in" onClick={() => onServe("in")}><small>{serveAttempt === 1 ? "1ST" : "2ND"} SERVE</small><strong>In</strong><span>Continue point</span></button><button className="big-action fault" onClick={() => onServe("fault")}><small>{serveAttempt === 1 ? "1ST" : "2ND"} SERVE</small><strong>Fault</strong><span>{serveAttempt === 1 ? "One ball left" : "Double fault"}</span></button><button className="wide-action ace" onClick={() => onServe("ace")}><small>POINT WON</small><strong>Ace</strong><span>Finish point</span></button></div>{serveAttempt === 2 && <ServeLandingRow label="First serve landed" selected={firstServeLanding} onSelect={onFirstServeLanding} />}</>; }
 function WinnerStage({ config, onWinner }: { config: MatchConfig; onWinner: (player: PlayerKey) => void }) { return <><div className="point-prompt"><p className="eyebrow">SERVE IS IN</p><h1>Who won the point?</h1></div><div className="winner-grid"><button onClick={() => onWinner("my")}><small>POINT TO</small><strong>{config.myPlayerName}</strong></button><button onClick={() => onWinner("opponent")}><small>POINT TO</small><strong>{config.opponentName}</strong></button></div></>; }
 function OutcomeStage({ allowedOutcomes, onOutcome, onSkip }: { allowedOutcomes: PointOutcome[]; onOutcome: (outcome: PointOutcome) => void; onSkip: () => void }) { const returnOutcome = (["return_winner", "return_error"] as PointOutcome[]).find((outcome) => allowedOutcomes.includes(outcome)); const outcomes = [returnOutcome, "winner", "forced_error", "unforced_error"].filter(Boolean) as PointOutcome[]; return <><div className="point-prompt compact"><p className="eyebrow">POINT SAVED</p><h1>How did the point end?</h1><p>Optional—choose one, or keep moving.</p></div><div className="outcome-grid">{outcomes.map((outcome) => <button className="outcome" key={outcome} onClick={() => onOutcome(outcome)}>{outcomeLabels[outcome]}</button>)}</div><button className="skip-button" onClick={onSkip}>Skip details <span>→</span></button></>; }
 function DetailsTray({ details, setDetails, onContinue }: { details: PointDetails; setDetails: (details: PointDetails) => void; onContinue: () => void }) {
-  const section = <T extends string>(title: string, key: keyof PointDetails, values: T[], labels?: Record<string, string>, className = "") => <div className={`detail-section ${className}`}><p>{title}</p><div>{values.map((value) => <button key={value} className={details[key] === value ? "selected" : ""} onClick={() => setDetails({ ...details, [key]: value })}>{labels?.[value] ?? value}</button>)}</div></div>;
+  // Tapping the chosen value again clears it, so a mis-tap does not need an undo.
+  const section = <T extends string>(title: string, key: keyof PointDetails, values: T[], labels?: Record<string, string>, className = "") => <div className={`detail-section ${className}`}><p>{title}</p><div>{values.map((value) => <button key={value} className={details[key] === value ? "selected" : ""} onClick={() => setDetails({ ...details, [key]: details[key] === value ? undefined : value })}>{labels?.[value] ?? value}</button>)}</div></div>;
   const showBallLanding = usesBallLandingOptions(details.outcome);
   const showAdvanced = usesAdvancedShotOptions(details.outcome);
-  return <><div className="point-prompt compact"><p className="eyebrow">{details.outcome ? outcomeLabels[details.outcome] : "POINT DETAILS"}</p><h1>Add shot details</h1><p>Everything below is optional.</p></div><div className="details-tray">{section<RallyRange>("Rally length", "rallyRange", ["1-5", "6-10", "11-20", "21+"])}{section<FinalStroke>("Final stroke", "finalStroke", ["forehand", "backhand", "neither"], shotLabels, "single-line")}{showBallLanding && section<BallLanding>("Ball landed", "ballLanding", ["net", "long", "side"], shotLabels, "single-line")}{section<ShotType>("Shot type", "shotType", ["groundstroke", "slice", "volley", "drop_shot", "lob", "overhead"], shotLabels, "three-column")}{showAdvanced && section<ShotSituation>("Advanced shot · Row 1", "shotSituation", ["approach_shot", "passing_shot"], shotLabels, "two-column")}{showAdvanced && section<AdvancedShotType>("Advanced shot · Row 2", "advancedShotType", ["cross_court", "inside_out", "inside_in"], shotLabels, "single-line")}<button className="continue-button" onClick={onContinue}>Continue to next point <span>→</span></button></div></>;
+  // A return ends two shots in, so rally length is fixed at 1-5 and set for you.
+  const showRally = usesRallyRange(details.outcome);
+  // Position only varies once a rally develops.
+  const showPosition = usesCourtPosition(details.outcome);
+  return <><div className="point-prompt compact"><p className="eyebrow">{details.outcome ? outcomeLabels[details.outcome] : "POINT DETAILS"}</p><h1>Add shot details</h1><p>Everything below is optional.</p></div><div className="details-tray">
+    {showRally && section<RallyRange>("Rally length", "rallyRange", ["1-5", "6-10", "11-20", "21+"])}
+    {section<FinalStroke>("Final stroke", "finalStroke", ["forehand", "backhand"], shotLabels, "two-column")}
+    {showBallLanding && section<BallLanding>("Ball landed", "ballLanding", ["net", "long", "side"], shotLabels, "single-line")}
+    {section<ShotType>("Shot type", "shotType", ["groundstroke", "slice", "volley", "drop_shot", "lob", "overhead"], shotLabels, "three-column")}
+    {showPosition && section<CourtPosition>("Court position at the end", "courtPosition", ["net", "service_line", "baseline"], positionLabels, "single-line")}
+    {showAdvanced && section<ShotSituation>("Advanced shot · Row 1", "shotSituation", ["approach_shot", "passing_shot"], shotLabels, "two-column")}
+    {showAdvanced && section<AdvancedShotType>("Advanced shot · Row 2", "advancedShotType", ["cross_court", "inside_out", "down_the_line"], shotLabels, "single-line")}
+    <button className="continue-button" onClick={onContinue}>Continue to next point <span>→</span></button>
+  </div></>;
 }
 function BottomNav({ tab, onTab }: { tab: Tab; onTab: (tab: Tab) => void }) { return <nav className="bottom-nav"><button className={tab === "track" ? "active" : ""} onClick={() => onTab("track")}><i>●</i><span>Track</span></button><button className={tab === "stats" ? "active" : ""} onClick={() => onTab("stats")}><i>▥</i><span>Stats</span></button><button className={tab === "timeline" ? "active" : ""} onClick={() => onTab("timeline")}><i>≡</i><span>Timeline</span></button><button className={tab === "match" ? "active" : ""} onClick={() => onTab("match")}><i>◇</i><span>Match</span></button></nav>; }
 
 const BALL_LANDINGS: BallLanding[] = ["net", "long", "side"];
 const landingLabels: Record<BallLanding, string> = { net: "Net", long: "Long", side: "Side" };
+const positionLabels: Record<CourtPosition, string> = { net: "Net", service_line: "Service line", baseline: "Baseline" };
 
 /** A labelled both-player table, the same shape as the main statistics table. */
 function StatTable({ names, rows }: { names: [string, string]; rows: StatRow[] }) {
@@ -458,6 +481,17 @@ function StatTable({ names, rows }: { names: [string, string]; rows: StatRow[] }
       <span>{entry.label}</span>
       <b>{entry.opponent.value}{entry.opponent.detail && <i>{entry.opponent.detail}</i>}</b>
     </div>)}</div>;
+}
+
+/** A card for figures that exist for one player only, so there is no second column. */
+function SingleStatCard({ eyebrow, heading, rows, note }: { eyebrow: string; heading: string; rows: SingleStatRow[]; note?: string }) {
+  return <div className="stats-group">
+    <div className="section-heading"><div><p className="eyebrow">{eyebrow}</p><h2>{heading}</h2></div></div>
+    <div className="stats-table single">{rows.map((entry) => <div className="stat-row" key={entry.label}>
+      <span>{entry.label}</span><b>{entry.value.value}{entry.value.detail && <i>{entry.value.detail}</i>}</b>
+    </div>)}</div>
+    {note && <p className="fine-print">{note}</p>}
+  </div>;
 }
 
 /** The same table under its own heading. */
@@ -475,13 +509,19 @@ function StatsView({ match, stats }: { match: MatchRecord; stats: ReturnType<typ
   // Shared with the coach report so both offer identical scopes.
   const scopeOptions = useMemo(() => statsScopeOptions(match.events, match.config), [match]);
   const viewStats = useMemo(() => scope === "total" ? stats : buildStats(filterEventsForStatsScope(match.events, match.config, scope), match.config), [match, scope, stats]);
+  // A set's length belongs beside that set's figures, not on the total.
+  const durations = useMemo(() => setDurations(match.events), [match]);
+  const scopeDuration = scope.startsWith("set_")
+    ? durations.find((entry) => entry.setNumber === Number(scope.slice(4)))
+    : undefined;
   const scopedPressure = useMemo(() => buildPressureAnalytics(
     scope === "total" ? match : { ...match, events: filterEventsForStatsScope(match.events, match.config, scope) },
   ), [match, scope]);
   const shot = viewStats[shotPlayer];
   const shotTypes: ShotType[] = ["groundstroke", "slice", "volley", "drop_shot", "lob", "overhead"];
-  const winnerPatterns = ["approach_shot", "passing_shot", "cross_court", "inside_out", "inside_in"] as const;
-  return <section className="full-view"><p className="eyebrow">LIVE MATCH DATA</p><h1>Live stats</h1><div className="stats-scope-tabs" role="group" aria-label="Stats scope">{scopeOptions.map((option)=><button className={scope===option.id?"selected":""} key={option.id} onClick={()=>setScope(option.id)}>{option.label}</button>)}</div><div className="coverage-card"><span><strong>{viewStats.coverage}%</strong><small>tracking coverage</small></span><span><strong>{viewStats.directlyTrackedPoints}</strong><small>points captured</small></span><span><strong>{viewStats.completeShotDetails}</strong><small>complete shots</small></span></div><StatTable names={[match.config.myPlayerName, match.config.opponentName]} rows={matchRows(viewStats)} /><ComparisonTable eyebrow="SCORE BEFORE EACH POINT" heading="Pressure" names={[match.config.myPlayerName, match.config.opponentName]} rows={pressureRows(scopedPressure)} note="A point can belong to more than one category; the overall row counts it once." /><ComparisonTable eyebrow="POINTS WON BY RALLY LENGTH" heading="Rally length" names={[match.config.myPlayerName, match.config.opponentName]} rows={rallyRows(viewStats)} /><ComparisonTable eyebrow="WHERE ERRORS LANDED" heading="Error placement" names={[match.config.myPlayerName, match.config.opponentName]} rows={landingRows(viewStats)} /><div className="shot-quality"><div className="section-heading"><div><p className="eyebrow">OBSERVED POINT ENDINGS</p><h2>Shot quality</h2></div><select value={shotPlayer} onChange={(event) => setShotPlayer(event.target.value as PlayerKey)}><option value="my">{match.config.myPlayerName}</option><option value="opponent">{match.config.opponentName}</option></select></div><div className="quality-grid"><Metric label="Forehand impact" value={shotImpact(shot.strokeOutcomes.forehand)} sample={shot.strokeOutcomes.forehand.total} detail={`${shot.strokeOutcomes.forehand.winners} won − ${shot.strokeOutcomes.forehand.errors} lost`} /><Metric label="Backhand impact" value={shotImpact(shot.strokeOutcomes.backhand)} sample={shot.strokeOutcomes.backhand.total} detail={`${shot.strokeOutcomes.backhand.winners} won − ${shot.strokeOutcomes.backhand.errors} lost`} /><Metric label="Net conversion" value={shotImpact(shot.netPlay)} sample={shot.netPlay.total} text={percentage(shot.netPlay.winners, shot.netPlay.total)} detail={`${shot.netPlay.winners} of ${shot.netPlay.total} volleys and overheads`} /><Metric label="Return quality" value={shot.returnWinners - shot.returnErrors} sample={shot.returnWinners + shot.returnErrors} detail={`${shot.returnWinners} winners − ${shot.returnErrors} errors`} /></div><p className="fine-print">Based only on observed point-ending shots—not every stroke in the rally. Impact counts endings that won the point (winners, return winners, and errors this player forced) minus the endings that lost it (return and unforced errors).</p></div><div className="shot-quality advanced-quality"><div className="section-heading"><div><p className="eyebrow">SELECTED SHOT DETAILS</p><h2>Shot quality — Advanced</h2></div></div><section className="advanced-stat-card"><h3>Shot type outcomes</h3><div className="advanced-stat-head"><span>SHOT</span><span>WON</span><span>ERRORS</span><span>OBSERVED</span></div>{shotTypes.map((type) => { const result = shot.shotTypeOutcomes[type]; return <div className="advanced-stat-row" key={type}><strong>{shotLabels[type]}</strong><b>{result.winners}</b><b>{result.errors}</b><small>n={result.total}</small></div>; })}</section><section className="advanced-stat-card"><h3>Winner patterns</h3><div className="winner-pattern-grid">{winnerPatterns.map((pattern) => <span key={pattern}><strong>{shot.winnerPatterns[pattern]}</strong><small>{shotLabels[pattern]}</small></span>)}</div></section><section className="advanced-stat-card"><h3>Points won by rally length</h3><div className="winner-pattern-grid">{(["1-5", "6-10", "11-20", "21+"] as RallyRange[]).map((range) => <span key={range}><strong>{shot.rallyWins[range]}</strong><small>{range} shots</small></span>)}</div></section><p className="fine-print">Won includes observed winners, return winners, and forced errors credited to the point winner. Errors include return and unforced errors. Winner patterns count only Winner and Return Winner points.</p></div></section>;
+  const winnerPatterns = WINNER_PATTERNS;
+  return <section className="full-view"><p className="eyebrow">LIVE MATCH DATA</p><h1>Live stats</h1><div className="stats-scope-tabs" role="group" aria-label="Stats scope">{scopeOptions.map((option)=><button className={scope===option.id?"selected":""} key={option.id} onClick={()=>setScope(option.id)}>{option.label}</button>)}</div>{scopeDuration && <p className="scope-duration">This set took {formatDuration(scopeDuration.seconds)}</p>}<div className="coverage-card"><span><strong>{viewStats.coverage}%</strong><small>tracking coverage</small></span><span><strong>{viewStats.directlyTrackedPoints}</strong><small>points captured</small></span><span><strong>{viewStats.completeShotDetails}</strong><small>complete shots</small></span></div><StatTable names={[match.config.myPlayerName, match.config.opponentName]} rows={matchRows(viewStats)} /><ComparisonTable eyebrow="SCORE BEFORE EACH POINT" heading="Pressure" names={[match.config.myPlayerName, match.config.opponentName]} rows={pressureRows(scopedPressure)} note="A point can belong to more than one category; the overall row counts it once." /><ComparisonTable eyebrow="POINTS WON BY RALLY LENGTH" heading="Rally length" names={[match.config.myPlayerName, match.config.opponentName]} rows={rallyRows(viewStats)} /><SingleStatCard eyebrow="WHERE POINTS ENDED" heading={`Court position · ${match.config.myPlayerName}`} rows={courtPositionRows(viewStats)} note="Recorded for your player only, on rally endings. Net conversion is counted separately, from volleys and overheads." />
+            <ComparisonTable eyebrow="WHERE ERRORS LANDED" heading="Error placement" names={[match.config.myPlayerName, match.config.opponentName]} rows={landingRows(viewStats)} /><div className="shot-quality"><div className="section-heading"><div><p className="eyebrow">OBSERVED POINT ENDINGS</p><h2>Shot quality</h2></div><select value={shotPlayer} onChange={(event) => setShotPlayer(event.target.value as PlayerKey)}><option value="my">{match.config.myPlayerName}</option><option value="opponent">{match.config.opponentName}</option></select></div><div className="quality-grid"><Metric label="Forehand impact" value={shotImpact(shot.strokeOutcomes.forehand)} sample={shot.strokeOutcomes.forehand.total} detail={`${shot.strokeOutcomes.forehand.winners} won − ${shot.strokeOutcomes.forehand.errors} lost`} /><Metric label="Backhand impact" value={shotImpact(shot.strokeOutcomes.backhand)} sample={shot.strokeOutcomes.backhand.total} detail={`${shot.strokeOutcomes.backhand.winners} won − ${shot.strokeOutcomes.backhand.errors} lost`} /><Metric label="Net conversion" value={shotImpact(shot.netPlay)} sample={shot.netPlay.total} text={percentage(shot.netPlay.winners, shot.netPlay.total)} detail={`${shot.netPlay.winners} of ${shot.netPlay.total} volleys and overheads`} /><Metric label="Return quality" value={shot.returnWinners - shot.returnErrors} sample={shot.returnWinners + shot.returnErrors} detail={`${shot.returnWinners} winners − ${shot.returnErrors} errors`} /></div><p className="fine-print">Based only on observed point-ending shots—not every stroke in the rally. Impact counts endings that won the point (winners, return winners, and errors this player forced) minus the endings that lost it (return and unforced errors).</p></div><div className="shot-quality advanced-quality"><div className="section-heading"><div><p className="eyebrow">SELECTED SHOT DETAILS</p><h2>Shot quality — Advanced</h2></div></div><section className="advanced-stat-card"><h3>Shot type outcomes</h3><div className="advanced-stat-head"><span>SHOT</span><span>WON</span><span>ERRORS</span><span>OBSERVED</span></div>{shotTypes.map((type) => { const result = shot.shotTypeOutcomes[type]; return <div className="advanced-stat-row" key={type}><strong>{shotLabels[type]}</strong><b>{result.winners}</b><b>{result.errors}</b><small>n={result.total}</small></div>; })}</section><section className="advanced-stat-card"><h3>Winner patterns</h3><div className="winner-pattern-grid">{winnerPatterns.map((pattern) => <span key={pattern}><strong>{shot.winnerPatterns[pattern]}</strong><small>{shotLabels[pattern]}</small></span>)}</div></section><section className="advanced-stat-card"><h3>Points won by rally length</h3><div className="winner-pattern-grid">{(["1-5", "6-10", "11-20", "21+"] as RallyRange[]).map((range) => <span key={range}><strong>{shot.rallyWins[range]}</strong><small>{range} shots</small></span>)}</div></section><p className="fine-print">Won includes observed winners, return winners, and forced errors credited to the point winner. Errors include return and unforced errors. Winner patterns count only Winner and Return Winner points.</p></div></section>;
 }
 /**
  * Requirements section 12: every metric shows its sample size and supporting
@@ -725,7 +765,7 @@ function ScoreSyncModal({ match, score, onClose, onSave }: { match: MatchRecord;
       corrected.setsWon[winnerIndex] += 1; corrected.games = [0, 0]; corrected.points = [0, 0]; corrected.inTiebreak = false;
       const needed = rule.bestOfSets === 1 ? 1 : 2;
       if (corrected.setsWon[winnerIndex] >= needed) { corrected.matchComplete = true; corrected.winner = winnerIndex === 0 ? "my" : "opponent"; }
-      else if (rule.matchTiebreakThird && corrected.sets.length === 2 && corrected.setsWon[0] === 1 && corrected.setsWon[1] === 1) { corrected.inTiebreak = true; corrected.tiebreakTarget = 10; corrected.tiebreakStartServer = server; }
+      else if (rule.matchTiebreakThird && corrected.sets.length === 2 && corrected.setsWon[0] === 1 && corrected.setsWon[1] === 1) { corrected.inTiebreak = true; corrected.tiebreakTarget = rule.matchTiebreakTarget ?? 10; corrected.tiebreakStartServer = server; }
     }
     if (finishMatch) {
       if (games[0] || games[1] || points[0] || points[1]) corrected.sets.push({ games: [...games] });

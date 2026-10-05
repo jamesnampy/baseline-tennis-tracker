@@ -1,6 +1,7 @@
 import { FORMAT_RULES, hasCompleteShotDetails, otherPlayer } from "./model.ts";
 import type {
   BallLanding,
+  CourtPosition,
   FinalStroke,
   MatchConfig,
   MatchEvent,
@@ -50,13 +51,19 @@ export interface PlayerStats {
   serveErrorLanding: Record<BallLanding, number>;
   /** Where this player's rally-ending errors landed. */
   rallyErrorLanding: Record<BallLanding, number>;
+  /**
+   * Points that ended with this player in each court position. Recorded for one
+   * player only and optional, so the sample is smaller than the point count and
+   * is reported with it.
+   */
+  courtPosition: Record<CourtPosition, { won: number; lost: number }>;
   /** Point-ending shots split by whether they won or lost the point, per stroke. */
   strokeOutcomes: Record<FinalStroke, ShotBreakdown>;
   /** Points ended at the net, by volley or overhead. */
   netPlay: ShotBreakdown;
   rallyWins: Record<string, number>;
   shotTypeOutcomes: Record<ShotType, ShotBreakdown>;
-  winnerPatterns: Record<"approach_shot" | "passing_shot" | "cross_court" | "inside_out" | "inside_in", number>;
+  winnerPatterns: Record<"approach_shot" | "passing_shot" | "cross_court" | "inside_out" | "down_the_line", number>;
 }
 
 /**
@@ -128,6 +135,7 @@ function emptyPlayerStats(): PlayerStats {
     secondServeReturnPointsWon: 0,
     serveErrorLanding: { net: 0, long: 0, side: 0 },
     rallyErrorLanding: { net: 0, long: 0, side: 0 },
+    courtPosition: { net: { won: 0, lost: 0 }, service_line: { won: 0, lost: 0 }, baseline: { won: 0, lost: 0 } },
     strokeOutcomes: { forehand: emptyBreakdown(), backhand: emptyBreakdown(), neither: emptyBreakdown() },
     netPlay: emptyBreakdown(),
     rallyWins: { "1-5": 0, "6-10": 0, "11-20": 0, "21+": 0 },
@@ -139,7 +147,7 @@ function emptyPlayerStats(): PlayerStats {
       lob: emptyBreakdown(),
       overhead: emptyBreakdown(),
     },
-    winnerPatterns: { approach_shot: 0, passing_shot: 0, cross_court: 0, inside_out: 0, inside_in: 0 },
+    winnerPatterns: { approach_shot: 0, passing_shot: 0, cross_court: 0, inside_out: 0, down_the_line: 0 },
   };
 }
 
@@ -277,8 +285,15 @@ function applyDetails(
   }
   if (winningOutcome) {
     if (details.shotSituation) player.winnerPatterns[details.shotSituation] += 1;
-    if (details.advancedShotType) player.winnerPatterns[details.advancedShotType] += 1;
+    const direction = details.advancedShotType === "inside_in" ? "down_the_line" : details.advancedShotType;
+    if (direction && direction !== "passing_shot") player.winnerPatterns[direction] += 1;
   }
+  if (details.courtPosition && details.courtPositionPlayer) {
+    const bucket = stats[details.courtPositionPlayer].courtPosition[details.courtPosition];
+    if (point.payload.winner === details.courtPositionPlayer) bucket.won += 1;
+    else bucket.lost += 1;
+  }
+
   // Where the error landed. Rally errors belong to whoever made them; a fault
   // always belongs to the server, whatever the point's outcome turned out to be.
   if (details.ballLanding && lostWithSelectedShot) player.rallyErrorLanding[details.ballLanding] += 1;
@@ -294,7 +309,7 @@ export type StatsScope = "total" | `set_${number}` | "match_tiebreak";
 
 export function pointStatsScope(point: PointCompletedEvent, config: MatchConfig): StatsScope {
   const score = point.payload.scoreBefore;
-  if (FORMAT_RULES[config.format].matchTiebreakThird && score.inTiebreak && score.tiebreakTarget === 10 && score.sets.length >= 2) return "match_tiebreak";
+  if (FORMAT_RULES[config.format].matchTiebreakThird && score.inTiebreak && score.sets.length >= 2) return "match_tiebreak";
   return `set_${score.sets.length + 1}`;
 }
 
@@ -335,7 +350,7 @@ export function statsScopeOptions(events: MatchEvent[], config: MatchConfig, inc
   const rules = FORMAT_RULES[config.format];
   if (includeUnplayed) {
     const current = projectScore(events, config);
-    const inMatchTiebreak = rules.matchTiebreakThird && current.inTiebreak && current.tiebreakTarget === 10 && current.sets.length >= 2;
+    const inMatchTiebreak = rules.matchTiebreakThird && current.inTiebreak && current.sets.length >= 2;
     if (!current.matchComplete && !inMatchTiebreak) setNumbers.add(current.sets.length + 1);
     if (!setNumbers.size) setNumbers.add(1);
   }
