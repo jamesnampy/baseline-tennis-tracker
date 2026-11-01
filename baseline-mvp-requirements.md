@@ -187,13 +187,13 @@ Profile views aggregate authorized matches by player, opponent, tournament, date
 ### Best of 3 · Short sets to 4
 
 - First to 4 games.
-- A 7-point tiebreak is played at 3–3.
+- A 7-point tiebreak is played at 4–4.
 - Tiebreak winner must win by 2 points.
 
 ### Best of 3 · Short sets plus match tiebreak
 
 - First two sets are short sets to 4.
-- A 7-point tiebreak is played at 3–3.
+- A 7-point tiebreak is played at 4–4.
 - A deciding third set is replaced by a **7-point** match tiebreak, win by 2.
 
 The length of a deciding tiebreak is declared by the format rather than inferred

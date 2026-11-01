@@ -186,10 +186,23 @@ test("best of three with match tiebreak starts a ten-point decider at one set al
   assert.equal(score.matchComplete, true); assert.equal(score.winner, "my"); assert.equal(score.sets[2].isMatchTiebreak, true);
 });
 
-test("short sets enter a tiebreak at 3-3", () => {
+test("short sets play on at 3-3 and 4-3, and enter a tiebreak at 4-4", () => {
   let score = initialScore("my");
   for (let index = 0; index < 3; index += 1) { score = winGame(score, "my", "short_sets"); score = winGame(score, "opponent", "short_sets"); }
-  assert.equal(score.inTiebreak, true); assert.deepEqual(score.games, [3, 3]);
+  assert.equal(score.inTiebreak, false); assert.deepEqual(score.games, [3, 3]);
+  score = winGame(score, "my", "short_sets");
+  assert.equal(score.inTiebreak, false); assert.equal(score.sets.length, 0); assert.deepEqual(score.games, [4, 3]);
+  score = winGame(score, "opponent", "short_sets");
+  assert.equal(score.inTiebreak, true); assert.equal(score.tiebreakTarget, 7); assert.deepEqual(score.games, [4, 4]);
+  for (let index = 0; index < 7; index += 1) score = winPoint(score, "my", "short_sets");
+  assert.equal(score.sets.length, 1); assert.deepEqual(score.sets[0].games, [5, 4]); assert.deepEqual(score.sets[0].tiebreak, [7, 0]);
+});
+
+test("short sets are won 5-3 from 4-3 without a tiebreak", () => {
+  let score = initialScore("my");
+  for (let index = 0; index < 3; index += 1) { score = winGame(score, "my", "short_sets"); score = winGame(score, "opponent", "short_sets"); }
+  score = winGame(score, "my", "short_sets"); score = winGame(score, "my", "short_sets");
+  assert.equal(score.sets.length, 1); assert.deepEqual(score.sets[0].games, [5, 3]); assert.equal(score.sets[0].tiebreak, undefined);
 });
 
 test("Pro 8 has no tiebreak and requires a two-game margin", () => {
